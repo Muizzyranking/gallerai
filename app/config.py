@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "GallerAI"
+    description: str = "Event photo sharing with face recognition"
     debug: bool = False
     secret_key: str = "key-**"
     access_token_expire_minutes: int = 60  # 1 hr
