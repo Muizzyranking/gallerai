@@ -1,6 +1,6 @@
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
-from app.config import get_settings
+from app.core.config import get_settings
 
 settings = get_settings()
 

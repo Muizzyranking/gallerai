@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     description: str = "Event photo sharing with face recognition"
     debug: bool = False
     secret_key: str = "key-**"
+    algorithm: str = "HS256"
     access_token_expire_minutes: int = 60  # 1 hr
 
     # PSQL

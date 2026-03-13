@@ -5,7 +5,7 @@ from sqlalchemy import DateTime, create_engine
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from app.config import settings
+from app.core.config import settings
 
 engine = create_engine(
     settings.database_url,
