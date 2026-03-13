@@ -1,0 +1,48 @@
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db import BaseModel, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.event import Event
+    from app.models.photo import Photo
+    from app.models.user import User
+
+
+class UserEventGallery(BaseModel, TimestampMixin):
+    __tablename__ = "user_event_galleries"
+    __table_args__ = (UniqueConstraint("user_id", "event_id", "photo_id"),)
+
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("events.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    photo_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("photos.id", ondelete="CASCADE"), nullable=False
+    )
+    match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_flagged: Mapped[bool] = mapped_column(Boolean, default=False)
+    flagged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="gallery_entries")
+    event: Mapped["Event"] = relationship("Event")
+    photo: Mapped["Photo"] = relationship("Photo", back_populates="gallery_entries")
