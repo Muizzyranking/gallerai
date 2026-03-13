@@ -12,13 +12,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import BaseModel
+from app.db import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.event import Event
+    from app.models.gallery import UserEventGallery
 
 
-class Photo(BaseModel):
+class Photo(BaseModel, TimestampMixin):
     __tablename__ = "photos"
 
     event_id: Mapped[str] = mapped_column(
@@ -41,7 +42,6 @@ class Photo(BaseModel):
     )  # pending | processing | processed | failed
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Relationships
