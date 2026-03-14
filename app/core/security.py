@@ -12,7 +12,9 @@ def hash_value(value: str) -> str:
     return pwd_hash.hash(value)
 
 
-def verify_hash(plain_value: str, hashed_value: str) -> bool:
+def verify_hash(plain_value: str | None, hashed_value: str | None) -> bool:
+    if not plain_value or not hashed_value:
+        return False
     return pwd_hash.verify(plain_value, hashed_value)
 
 
