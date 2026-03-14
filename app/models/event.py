@@ -1,10 +1,25 @@
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.enums import (
+    AccessMode,
+    EventRole,
+    EventStatus,
+    InviteStatus,
+    MemberStatus,
+)
 from app.db import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
@@ -27,10 +42,18 @@ class Event(BaseModel, TimestampMixin):
     event_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cover_photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     # active | archived | deleted
-    status: Mapped[str] = mapped_column(String(50), default="active")
+    status: Mapped[EventStatus] = mapped_column(
+        Enum(EventStatus, values_callable=lambda x: [e.value for e in x]),
+        default=EventStatus.ACTIVE,
+        nullable=False,
+    )
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
     # link | code | approved_list | combined
-    access_mode: Mapped[str] = mapped_column(String(50), default="link")
+    access_mode: Mapped[AccessMode] = mapped_column(
+        Enum(AccessMode, values_callable=lambda x: [e.value for e in x]),
+        default=AccessMode.LINK,
+        nullable=False,
+    )
     access_code_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Relationships
@@ -59,12 +82,15 @@ class EventMember(BaseModel):
     user_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    role: Mapped[str] = mapped_column(
-        String(50), nullable=False
-    )  # organizer | attendee
-    status: Mapped[str] = mapped_column(
-        String(50), default="active"
-    )  # active | removed
+    role: Mapped[EventRole] = mapped_column(
+        Enum(EventRole, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
+    status: Mapped[MemberStatus] = mapped_column(
+        Enum(MemberStatus, values_callable=lambda x: [e.value for e in x]),
+        default=MemberStatus.ACTIVE,
+        nullable=False,
+    )
     added_by: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("users.id"), nullable=True
     )
@@ -93,9 +119,11 @@ class EventInvite(BaseModel):
     invite_token: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
-    status: Mapped[str] = mapped_column(
-        String(50), default="pending"
-    )  # pending | accepted | revoked
+    status: Mapped[InviteStatus] = mapped_column(
+        Enum(InviteStatus, values_callable=lambda x: [e.value for e in x]),
+        default=InviteStatus.PENDING,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )

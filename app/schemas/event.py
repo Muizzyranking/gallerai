@@ -2,11 +2,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.core.enums import AccessMode, EventStatus
+
 
 class EventAccessConfig(BaseModel):
-    """Defines how attendees gain access to an event."""
-
-    access_mode: str = "link"  # link | code | approved_list | combined
+    access_mode: AccessMode = AccessMode.LINK
     access_code: str | None = None  # plain text, hashed before storage
 
 
@@ -22,7 +22,7 @@ class EventUpdate(BaseModel):
     description: str | None = None
     event_date: datetime | None = None
     is_private: bool | None = None
-    status: str | None = None  # active | archived
+    status: EventStatus | None = None
 
 
 class EventResponse(BaseModel):
@@ -34,26 +34,20 @@ class EventResponse(BaseModel):
     description: str | None
     event_date: datetime | None
     cover_photo_url: str | None
-    status: str
+    status: EventStatus
     is_private: bool
-    access_mode: str
+    access_mode: AccessMode
     created_at: datetime
     updated_at: datetime
 
 
 class EventAccessVerify(BaseModel):
-    """Payload to verify event access via code."""
-
     access_code: str
 
 
 class InviteCreate(BaseModel):
-    """Add one or more emails to the approved list."""
-
     emails: list[str]
 
 
 class MemberAdd(BaseModel):
-    """Add a co-organizer by user id."""
-
     user_id: str
