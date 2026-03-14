@@ -14,6 +14,7 @@ from app.schemas.event import (
     EventCreate,
     EventResponse,
     EventUpdate,
+    InviteCreate,
     MemberAdd,
 )
 from app.services import event_service
