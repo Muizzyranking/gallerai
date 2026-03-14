@@ -10,6 +10,7 @@ from app.db.postgres import get_db
 from app.models.event import Event
 from app.models.user import User
 from app.schemas.event import (
+    EventAccessVerify,
     EventCreate,
     EventResponse,
     EventUpdate,
@@ -57,3 +58,10 @@ def delete_event(
     db: Session = Depends(get_db),
 ):
     event_service.delete_event(event, db)
+
+
+@router.post("/{event_id}/access/verify", status_code=status.HTTP_200_OK)
+def verify_access(payload: EventAccessVerify, event: Event = Depends(get_event_or_404)):
+    """Verify an access code. Returns 200 if valid, 403 if not."""
+    event_service.verify_event_access_code(event, payload.access_code)
+    return {"message": "Access granted"}
