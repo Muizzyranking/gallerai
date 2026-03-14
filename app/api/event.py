@@ -86,3 +86,22 @@ def remove_member(
     db: Session = Depends(get_db),
 ):
     event_service.remove_member(event, user_id, db)
+
+
+@router.post("/{event_id}/invites", status_code=status.HTTP_201_CREATED)
+def add_invites(
+    payload: InviteCreate,
+    event: Event = Depends(require_event_organizer),
+    db: Session = Depends(get_db),
+):
+    invites = event_service.add_invites(event, payload, db)
+    return {"message": f"{len(invites)} invite(s) created", "count": len(invites)}
+
+
+@router.delete("/{event_id}/invites/{email}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_invite(
+    email: str,
+    event: Event = Depends(require_event_organizer),
+    db: Session = Depends(get_db),
+):
+    event_service.revoke_invite(event, email, db)
