@@ -14,6 +14,7 @@ from app.schemas.event import (
     EventCreate,
     EventResponse,
     EventUpdate,
+    MemberAdd,
 )
 from app.services import event_service
 
@@ -65,3 +66,23 @@ def verify_access(payload: EventAccessVerify, event: Event = Depends(get_event_o
     """Verify an access code. Returns 200 if valid, 403 if not."""
     event_service.verify_event_access_code(event, payload.access_code)
     return {"message": "Access granted"}
+
+
+@router.post("/{event_id}/members", status_code=status.HTTP_201_CREATED)
+def add_co_organizer(
+    payload: MemberAdd,
+    event: Event = Depends(require_event_organizer),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    member = event_service.add_co_organizer(event, payload.user_id, current_user, db)
+    return {"message": "Co-organizer added", "member_id": member.id}
+
+
+@router.delete("/{event_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_member(
+    user_id: str,
+    event: Event = Depends(require_event_organizer),
+    db: Session = Depends(get_db),
+):
+    event_service.remove_member(event, user_id, db)
