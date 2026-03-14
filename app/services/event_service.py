@@ -3,11 +3,17 @@ from typing import Literal
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.enums import AccessMode, EventRole, EventStatus, MemberStatus
+from app.core.enums import (
+    AccessMode,
+    EventRole,
+    EventStatus,
+    InviteStatus,
+    MemberStatus,
+)
 from app.core.security import hash_value, verify_hash
-from app.models.event import Event, EventMember
+from app.models.event import Event, EventInvite, EventMember
 from app.models.user import User
-from app.schemas.event import EventCreate, EventUpdate
+from app.schemas.event import EventCreate, EventUpdate, InviteCreate
 
 
 def create_event(payload: EventCreate, owner: User, db: Session) -> Event:
@@ -149,4 +155,49 @@ def remove_member(event: Event, user_id: str, db: Session) -> None:
         )
 
     member.status = MemberStatus.REMOVED
+    db.commit()
+
+
+def add_invites(event: Event, payload: InviteCreate, db: Session) -> list[EventInvite]:
+    import secrets
+
+    invites = []
+    for email in payload.emails:
+        existing = (
+            db.query(EventInvite)
+            .filter(EventInvite.event_id == event.id, EventInvite.email == email)
+            .first()
+        )
+        if existing:
+            if existing.status == InviteStatus.REVOKED:
+                existing.status = InviteStatus.PENDING
+                existing.invite_token = secrets.token_urlsafe(32)
+                db.flush()
+                invites.append(existing)
+            continue
+
+        invite = EventInvite(
+            event_id=event.id,
+            email=email,
+            invite_token=secrets.token_urlsafe(32),
+        )
+        db.add(invite)
+        db.flush()
+        invites.append(invite)
+
+    db.commit()
+    return invites
+
+
+def revoke_invite(event: Event, email: str, db: Session) -> None:
+    invite = (
+        db.query(EventInvite)
+        .filter(EventInvite.event_id == event.id, EventInvite.email == email)
+        .first()
+    )
+    if not invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found"
+        )
+    invite.status = InviteStatus.REVOKED
     db.commit()
