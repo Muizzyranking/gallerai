@@ -201,3 +201,31 @@ def revoke_invite(event: Event, email: str, db: Session) -> None:
         )
     invite.status = InviteStatus.REVOKED
     db.commit()
+
+
+def get_event_list(owner: User, db: Session) -> list[Event]:
+    owned = (
+        db.query(Event)
+        .filter(Event.owner_id == owner.id, Event.status != EventStatus.DELETED)
+        .all()
+    )
+    owned_ids = [e.id for e in owned]
+    co_organized_ids = (
+        db.query(EventMember.event_id)
+        .filter(
+            EventMember.user_id == owner.id,
+            EventMember.role == EventRole.ORGANIZER,
+            EventMember.status == MemberStatus.ACTIVE,
+            EventMember.event_id.notin_(owned_ids),
+        )
+        .all()
+    )
+    co_organized_ids = [r[0] for r in co_organized_ids]
+    co_organized = (
+        db.query(Event)
+        .filter(Event.id.in_(co_organized_ids), Event.status != EventStatus.DELETED)
+        .all()
+        if co_organized_ids
+        else []
+    )
+    return owned + co_organized
