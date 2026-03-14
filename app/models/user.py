@@ -9,14 +9,14 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import BaseModel
+from app.db import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.event import Event, EventMember
     from app.models.gallery import UserEventGallery
 
 
-class User(BaseModel):
+class User(BaseModel, TimestampMixin):
     __tablename__ = "users"
 
     email: Mapped[str] = mapped_column(
