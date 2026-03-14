@@ -8,12 +8,12 @@ from app.core.config import settings
 pwd_hash = PasswordHash.recommended()
 
 
-def hash_password(password: str) -> str:
-    return pwd_hash.hash(password)
+def hash_value(value: str) -> str:
+    return pwd_hash.hash(value)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_hash.verify(plain_password, hashed_password)
+def verify_hash(plain_value: str, hashed_value: str) -> bool:
+    return pwd_hash.verify(plain_value, hashed_value)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None) -> str:

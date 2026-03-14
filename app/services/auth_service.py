@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.core.security import (
     create_access_token_for_user,
-    hash_password,
-    verify_password,
+    hash_value,
+    verify_hash,
 )
 from app.models.user import User
 from app.schemas.user import TokenResponse, UserCreate
@@ -19,7 +19,7 @@ def register_user(payload: UserCreate, db: Session) -> TokenResponse:
         )
     user = User(
         email=payload.email,
-        password_hash=hash_password(payload.password),
+        password_hash=hash_value(payload.password),
         display_name=payload.display_name,
     )
     db.add(user)
@@ -34,7 +34,7 @@ def login_user(email: str, password: str, db: Session) -> TokenResponse:
     if (
         not user
         or not user.password_hash
-        or not verify_password(password, user.password_hash)
+        or not verify_hash(password, user.password_hash)
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
