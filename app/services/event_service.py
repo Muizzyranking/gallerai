@@ -18,6 +18,13 @@ from app.schemas.event import EventCreate, EventUpdate, InviteCreate
 
 def create_event(payload: EventCreate, owner: User, db: Session) -> Event:
     access_code_hash = None
+
+    if payload.access_config.access_mode in (AccessMode.CODE, AccessMode.COMBINED):
+        if not payload.access_config.access_code:
+            raise HTTPException(
+                status_code=400,
+                detail="An access code is required for code and combined access modes",
+            )
     if payload.access_config.access_code:
         access_code_hash = hash_value(payload.access_config.access_code)
 
