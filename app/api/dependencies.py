@@ -2,9 +2,10 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.core.security import decode_access_token_for_user
+from app.core.enums import AccessMode, InviteStatus
+from app.core.security import decode_access_token_for_user, verify_hash
 from app.db import get_db
-from app.models.event import Event, EventMember
+from app.models.event import Event, EventInvite, EventMember
 from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -89,3 +90,72 @@ def require_event_organizer(
             status_code=status.HTTP_403_FORBIDDEN, detail="Organizer access required"
         )
     return event
+
+
+def user_is_invited(db: Session, event_id: str, email: str) -> bool:
+    return (
+        db.query(EventInvite)
+        .filter(
+            EventInvite.event_id == event_id,
+            EventInvite.email == email,
+            EventInvite.status.in_([InviteStatus.PENDING, InviteStatus.ACCEPTED]),
+        )
+        .first()
+        is not None
+    )
+
+
+def valid_access_code(event: Event, access_code: str | None) -> bool:
+    if not access_code or not event.access_code_hash:
+        return False
+    return verify_hash(access_code, event.access_code_hash)
+
+
+def get_event_access(
+    event: Event = Depends(get_event_or_404),
+    current_user: User | None = Depends(get_current_user_optional),
+    access_code: str | None = None,
+    db: Session = Depends(get_db),
+) -> Event:
+    """
+    Verify access to the event based on its access mode. Raises 403 if access is denied.
+    """
+
+    # link is public
+    if event.access_mode == AccessMode.LINK:
+        return event
+
+    # access code is required for code
+    if event.access_mode == AccessMode.CODE:
+        if not valid_access_code(event, access_code):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Invalid access token"
+            )
+        return event
+
+    # approved list requires current_user to be in the approved list
+    if event.access_mode == AccessMode.APPROVED_LIST:
+        if not current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Login required for this event",
+            )
+        if not user_is_invited(db, event.id, current_user.email):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not on the approved list",
+            )
+        return event
+
+    # user can be either in the list or use code
+    if event.access_mode == AccessMode.COMBINED:
+        if current_user and user_is_invited(db, event.id, current_user.email):
+            return event
+
+        if not valid_access_code(event, access_code):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Invalid access code"
+            )
+        return event
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
