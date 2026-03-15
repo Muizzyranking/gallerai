@@ -4,18 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.db import Collections, close_mongo_client, get_mongo_db
+from app.core.logging import setup_logging
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    db = get_mongo_db()
-    await db[Collections.FACE_EMBEDDINGS].create_index("event_id")
-    await db[Collections.FACE_EMBEDDINGS].create_index("photo_id")
-    await db[Collections.FACE_EMBEDDINGS].create_index(
-        [("event_id", 1), ("photo_id", 1)]
-    )
-    yield
+setup_logging(env=settings.app_env)
 
     await close_mongo_client()
 
