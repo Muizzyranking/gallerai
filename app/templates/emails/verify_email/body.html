@@ -1,0 +1,89 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Verify Your Email{% endblock %}
+
+{% block content %}
+<!-- Icon -->
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:32px;">
+  <tr>
+    <td align="center">
+      <div style="width:64px; height:64px; background-color:rgba(255,107,107,0.15); border-radius:50%; text-align:center; line-height:64px; border:1px solid rgba(255,107,107,0.3);">
+        <span style="font-size:28px;">✉️</span>
+      </div>
+    </td>
+  </tr>
+</table>
+
+<!-- Heading -->
+<h1 style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:28px; font-weight:600; color:#ffffff; margin:0 0 16px 0; text-align:center; letter-spacing:-0.02em;" class="text-primary heading">
+  Verify Your Email
+</h1>
+
+<!-- Personal Greeting -->
+<p style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:18px; font-weight:500; color:#ffffff; margin:0 0 8px 0; text-align:center;" class="text-primary">
+  Hi {{ display_name }},
+</p>
+
+<!-- Body -->
+<p style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:16px; line-height:1.6; color:#a0a0a0; margin:0 0 24px 0; text-align:center;" class="text-secondary">
+  Please confirm your email address to activate your account and unlock all features. This link expires in 24 hours.
+</p>
+
+<!-- CTA Button -->
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:32px 0;">
+  <tr>
+    <td align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="background-color:#ff6b6b; border-radius:8px; text-align:center;">
+            <a href="{{ verification_link }}" style="display:inline-block; padding:14px 32px; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:15px; font-weight:600; color:#ffffff; text-decoration:none; border-radius:8px;">
+              Verify Email Address
+            </a>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+
+<!-- Divider -->
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:32px 0;">
+  <tr>
+    <td style="border-top:1px solid #2a2a2a; padding-top:32px;">
+      <p style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:14px; line-height:1.6; color:#666666; margin:0; text-align:center;" class="text-tertiary">
+        Or copy and paste this link into your browser:<br>
+        <a href="{{ verification_link }}" style="color:#ff6b6b; text-decoration:none; word-break:break-all; font-size:12px;">{{ verification_link }}</a>
+      </p>
+    </td>
+  </tr>
+</table>
+
+<!-- Value Props -->
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-top:32px;">
+  <tr>
+    <td>
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td style="padding:16px; background-color:rgba(255,255,255,0.03); border-radius:8px; border:1px solid #2a2a2a; text-align:center;">
+            <div style="font-size:24px; margin-bottom:8px;">🤖</div>
+            <div style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:13px; font-weight:600; color:#ffffff; margin-bottom:4px;" class="text-primary">AI-Powered</div>
+            <div style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:12px; color:#666666;" class="text-tertiary">Smart face recognition</div>
+          </td>
+          <td width="12"></td>
+          <td style="padding:16px; background-color:rgba(255,255,255,0.03); border-radius:8px; border:1px solid #2a2a2a; text-align:center;">
+            <div style="font-size:24px; margin-bottom:8px;">⚡</div>
+            <div style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:13px; font-weight:600; color:#ffffff; margin-bottom:4px;" class="text-primary">Instant Sharing</div>
+            <div style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:12px; color:#666666;" class="text-tertiary">No app required</div>
+          </td>
+          <td width="12"></td>
+          <td style="padding:16px; background-color:rgba(255,255,255,0.03); border-radius:8px; border:1px solid #2a2a2a; text-align:center;">
+            <div style="font-size:24px; margin-bottom:8px;">🔒</div>
+            <div style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:13px; font-weight:600; color:#ffffff; margin-bottom:4px;" class="text-primary">Private</div>
+            <div style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:12px; color:#666666;" class="text-tertiary">Secure galleries</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+{% endblock %}
