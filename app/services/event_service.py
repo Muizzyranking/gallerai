@@ -13,6 +13,7 @@ from app.core.enums import (
 from app.core.security import hash_value, verify_hash
 from app.models.event import Event, EventInvite, EventMember
 from app.models.user import User
+from app.schemas import MemberAdd
 from app.schemas.event import EventCreate, EventUpdate, InviteCreate
 
 
@@ -98,30 +99,56 @@ def verify_event_access_code(event: Event, access_code: str | None) -> Literal[T
 
 
 def add_co_organizer(
-    event: Event, user_id: str, added_by: User, db: Session
+    event: Event, payload: MemberAdd, added_by: User, db: Session
 ) -> EventMember:
-    if user_id == event.owner_id:
+    user_id = payload.user_id
+    email = payload.email
+
+    if not email and not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either email or user_id is required",
+        )
+
+    user = None
+
+    if email:
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User with this email not found",
+            )
+    else:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+    if user.id == event.owner_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User is already the event owner",
         )
 
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-        )
-
     existing = (
         db.query(EventMember)
-        .filter(EventMember.event_id == event.id, EventMember.user_id == user_id)
+        .filter(
+            EventMember.event_id == event.id,
+            EventMember.user_id == user.id,
+        )
         .first()
     )
+
     if existing:
         if existing.status == MemberStatus.ACTIVE:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail="User is already a member"
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User is already a member",
             )
+
         existing.status = MemberStatus.ACTIVE
         existing.role = EventRole.ORGANIZER
         db.commit()
@@ -130,7 +157,7 @@ def add_co_organizer(
 
     member = EventMember(
         event_id=event.id,
-        user_id=user_id,
+        user_id=user.id,
         role=EventRole.ORGANIZER,
         added_by=added_by.id,
     )
