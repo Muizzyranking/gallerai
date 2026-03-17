@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "GallerAI"
     description: str = "Event photo sharing with face recognition"
     debug: bool = False
+    app_env: str = "development"
     secret_key: str = "key-**"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60  # 1 hr
@@ -61,7 +62,7 @@ class Settings(BaseSettings):
         return self.get_redis_url(1)
 
     # storage
-    storage_backend: str = "localhost"
+    storage_backend: str = "local"
     local_storage_path: str = "./storage"
 
 
