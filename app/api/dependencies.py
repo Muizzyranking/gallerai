@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.core.enums import AccessMode, InviteStatus
+from app.core.enums import AccessMode, EventRole, InviteStatus, MemberStatus
 from app.core.security import decode_access_token_for_user, verify_hash
 from app.db import get_db
 from app.models.event import Event, EventInvite, EventMember
@@ -12,11 +12,12 @@ from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
+DB = Annotated[Session, Depends(get_db)]
 
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
-) -> User:
+Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
+
+
+def get_current_user(credentials: Credentials, db: DB) -> User:
     """Require a valid JWT. Raises 401 if missing or invalid."""
     if not credentials:
         raise HTTPException(
@@ -41,10 +42,7 @@ def get_current_user(
     return user
 
 
-def get_current_user_optional(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
-) -> User | None:
+def get_current_user_optional(credentials: Credentials, db: DB) -> User | None:
     """
     Try to resolve a user from JWT but return None if not authenticated.
     Used for endpoints that support both registered and anonymous access.
@@ -57,7 +55,7 @@ def get_current_user_optional(
     return db.query(User).filter(User.id == user_id).first()
 
 
-def get_event_or_404(event_id: str, db: Session = Depends(get_db)) -> Event:
+def get_event_or_404(event_id: str, db: DB) -> Event:
     """Fetch event by ID or raise 404."""
     event = (
         db.query(Event).filter(Event.id == event_id, Event.status != "deleted").first()
@@ -70,9 +68,9 @@ def get_event_or_404(event_id: str, db: Session = Depends(get_db)) -> Event:
 
 
 def require_event_organizer(
-    event: Event = Depends(get_event_or_404),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    event: Annotated[Event, Depends(get_event_or_404)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: DB,
 ) -> Event:
     """Ensure the current user is the owner or a co-organizer of the event."""
     if event.owner_id == current_user.id:
@@ -82,8 +80,8 @@ def require_event_organizer(
         .filter(
             EventMember.event_id == event.id,
             EventMember.user_id == current_user.id,
-            EventMember.role == "organizer",
-            EventMember.status == "active",
+            EventMember.role == EventRole.ORGANIZER,
+            EventMember.status == MemberStatus.ACTIVE,
         )
         .first()
     )
@@ -163,5 +161,7 @@ def get_event_access(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
 
-DB = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+EventOr404 = Annotated[Event, Depends(get_event_or_404)]
+OrganizerEvent = Annotated[Event, Depends(require_event_organizer)]
+AccessibleEvent = Annotated[Event, Depends(get_event_access)]
