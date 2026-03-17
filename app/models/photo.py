@@ -38,6 +38,9 @@ class Photo(BaseModel, TimestampMixin):
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mime_type: Mapped[str] = mapped_column(
+        String(50), nullable=True, default="image/jpeg"
+    )
     face_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[PhotoStatus] = mapped_column(
         Enum(PhotoStatus, values_callable=lambda x: [e.value for e in x]),
