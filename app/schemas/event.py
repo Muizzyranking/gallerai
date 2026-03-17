@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 from app.core.enums import AccessMode, EventStatus
 
@@ -42,7 +42,7 @@ class EventResponse(BaseModel):
 
 
 class EventAccessVerify(BaseModel):
-    access_code: str
+    access_code: str | None = None
 
 
 class InviteCreate(BaseModel):
@@ -50,4 +50,5 @@ class InviteCreate(BaseModel):
 
 
 class MemberAdd(BaseModel):
-    user_id: str
+    user_id: str | None = None
+    email: EmailStr | None = None

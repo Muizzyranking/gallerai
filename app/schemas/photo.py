@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from app.core.enums import PhotoStatus
 
 
-class PhotoResponse(BaseModel):
+class PhotoSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
@@ -17,8 +17,12 @@ class PhotoResponse(BaseModel):
     face_count: int
     status: PhotoStatus
     is_private: bool
-    uploaded_at: datetime
     processed_at: datetime | None
+
+
+class PhotoResponse(BaseModel):
+    total: str
+    photos: list[PhotoSchema]
 
 
 class PhotoBulkUploadResponse(BaseModel):
