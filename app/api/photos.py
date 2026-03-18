@@ -13,6 +13,7 @@ from app.core.schemas import ApiResponse
 from app.schemas.photo import (
     PhotoBulkUploadResponse,
     PhotoResponse,
+    PhotoSchema,
     PhotoUpdateRequest,
     ProcessingStatusResponse,
 )
@@ -125,7 +126,7 @@ def serve_photo(photo_id: str, event: AccessibleEvent, db: DB) -> FileResponse:
 
 @router.patch(
     "/{photo_id}",
-    response_model=ApiResponse[PhotoResponse],
+    response_model=ApiResponse[PhotoSchema],
     summary="Update a photo's visibility",
 )
 def update_photo_privacy(
@@ -137,9 +138,9 @@ def update_photo_privacy(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to update"
         )
     photo = photo_service.set_photo_privacy(photo_id, payload.is_private, event, db)
-    return ApiResponse[PhotoResponse](
+    return ApiResponse[PhotoSchema](
         message="Photo updated successfully",
-        data=PhotoResponse.model_validate(photo),
+        data=PhotoSchema.model_validate(photo),
     )
 
 
