@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
     local_storage_path: str = "./storage"
 
+    # Face recognition
+    face_detector_backend: str = "retinaface"
+    face_model_name: str = "ArcFace"
+    face_similarity_threshold: float = 0.6
+    face_detection_confidence: float = 0.9
+    face_min_size: int = 80  # minimum face bounding box size in pixels
+    anonymous_scan_ttl_seconds: int = 86400  # 24 hrs
+
 
 @lru_cache
 def get_settings() -> Settings:
