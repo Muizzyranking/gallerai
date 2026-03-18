@@ -126,12 +126,14 @@ def get_event_photos(
                 event_id=p.event_id,
                 filename=p.filename,
                 file_size=p.file_size,
+                mime_type=p.mime_type,
                 width=p.width,
                 height=p.height,
                 face_count=p.face_count,
                 status=p.status,
                 is_private=p.is_private,
                 processed_at=p.processed_at,
+                created_at=p.created_at,
             )
             for p in photos
         ],
