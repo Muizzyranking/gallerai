@@ -3,12 +3,26 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import router
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.db import Collections, close_mongo_client, close_redis, get_mongo_db
 
 setup_logging(env=settings.app_env)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db = get_mongo_db()
+    await db[Collections.FACE_EMBEDDINGS].create_index("event_id")
+    await db[Collections.FACE_EMBEDDINGS].create_index("photo_id")
+    await db[Collections.FACE_EMBEDDINGS].create_index(
+        [("event_id", 1), ("photo_id", 1)]
+    )
+    yield
+
     await close_mongo_client()
+    await close_redis()
 
 
 app = FastAPI(
@@ -19,12 +33,15 @@ app = FastAPI(
 )
 
 app.add_middleware(
-    CORSMiddleware,
+    CORSMiddleware,  # type: ignore
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(router, prefix="/api/v1")
 
 
 @app.get("/health")
