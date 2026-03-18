@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.photo import PhotoResponse
+from app.schemas.photo import PhotoSchema
 
 
 class GalleryPhotoResponse(BaseModel):
@@ -11,9 +11,10 @@ class GalleryPhotoResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    photo: PhotoResponse
+    photo: PhotoSchema
     match_score: float | None
     is_flagged: bool
+    # flag_reason: str | None
     flagged_at: datetime | None
     created_at: datetime
 
@@ -33,7 +34,7 @@ class AnonymousGalleryResponse(BaseModel):
 
     event_id: str
     total: int
-    photos: list[PhotoResponse]
+    photos: list[PhotoSchema]
 
 
 class FlagPhotoRequest(BaseModel):
