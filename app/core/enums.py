@@ -35,3 +35,16 @@ class PhotoStatus(str, enum.Enum):
     PROCESSING = "processing"
     PROCESSED = "processed"
     FAILED = "failed"
+
+
+class FlagReason(str, enum.Enum):
+    """
+    Reason a user flagged a photo in their gallery.
+    not_me: face recognition false positive
+    dislike: personal preference, not a match error
+    removed: user removed without giving a reason
+    """
+
+    NOT_ME = "not_me"
+    DISLIKE = "dislike"
+    REMOVED = "removed"
