@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 from app.core.enums import PhotoStatus
 
@@ -12,12 +12,19 @@ class PhotoSchema(BaseModel):
     event_id: str
     filename: str | None
     file_size: int | None
+    mime_type: str
     width: int | None
     height: int | None
     face_count: int
     status: PhotoStatus
     is_private: bool
+    created_at: datetime
     processed_at: datetime | None
+
+    @computed_field
+    @property
+    def url(self) -> str:
+        return f"/events/{self.event_id}/photos/serve/{self.id}"
 
 
 class PhotoResponse(BaseModel):
