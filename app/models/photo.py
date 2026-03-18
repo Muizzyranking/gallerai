@@ -39,7 +39,7 @@ class Photo(BaseModel, TimestampMixin):
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mime_type: Mapped[str] = mapped_column(
-        String(50), nullable=True, default="image/jpeg"
+        String(50), nullable=False, default="image/jpeg"
     )
     face_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[PhotoStatus] = mapped_column(
