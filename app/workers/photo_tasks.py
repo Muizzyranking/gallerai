@@ -92,3 +92,15 @@ def process_photo_task(self, photo_id: str):
         raise self.retry(exc=e) from e
     finally:
         db.close()
+
+
+@celery_app.task(name="photo_tasks.warmup_models")
+def warmup_models_task() -> dict:
+    """
+    Pre-load DeepFace model weights into memory.
+    Called once at worker startup via celery signals.
+    """
+    from app.services.face_service import warmup
+
+    warmup()
+    return {"status": "warmed up"}
