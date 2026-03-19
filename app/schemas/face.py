@@ -4,11 +4,11 @@ from pydantic import BaseModel
 class FaceScanResponse(BaseModel):
     """
     Returned after a registered user scans their face.
-    Embedding is saved to their profile.
+    Embedding is saved to their profile and gallery is built immediately.
     """
 
-    message: str
     face_detected: bool
+    match_count: int
 
 
 class AnonymousScanResponse(BaseModel):
@@ -17,9 +17,9 @@ class AnonymousScanResponse(BaseModel):
     Embedding is never stored — results are held in Redis under the token.
     """
 
-    scan_token: str  # short-lived Redis key to retrieve results
+    scan_token: str
     expires_in_seconds: int
-    match_count: int  # how many photos were matched
+    match_count: int
 
 
 class FaceMatchResult(BaseModel):
@@ -27,3 +27,9 @@ class FaceMatchResult(BaseModel):
 
     photo_id: str
     match_score: float
+
+
+class ClaimGalleryRequest(BaseModel):
+    """Request body to claim an anonymous gallery into a registered account."""
+
+    scan_token: str

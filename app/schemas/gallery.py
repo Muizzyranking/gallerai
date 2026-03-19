@@ -14,7 +14,7 @@ class GalleryPhotoResponse(BaseModel):
     photo: PhotoSchema
     match_score: float | None
     is_flagged: bool
-    # flag_reason: str | None
+    flag_reason: str | None
     flagged_at: datetime | None
     created_at: datetime
 
