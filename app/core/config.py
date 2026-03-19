@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     face_similarity_threshold: float = 0.6
     face_detection_confidence: float = 0.9
     face_min_size: int = 80  # minimum face bounding box size in pixels
-    anonymous_scan_ttl_seconds: int = 86400  # 24 hrs
+    anonymous_scan_ttl_seconds: int = 7200  # 2 hours
 
 
 @lru_cache
