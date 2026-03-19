@@ -7,6 +7,10 @@ services:
       - ./storage:/app/storage
     env_file:
       - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - MONGO_HOST=mongo
+      - REDIS_HOST=redis
     depends_on:
       postgres:
         condition: service_healthy
@@ -20,6 +24,7 @@ services:
     build: .
     volumes:
       - ./storage:/app/storage
+      - deepface_weights:/root/.deepface  
     env_file:
       - .env
     depends_on:
@@ -35,10 +40,12 @@ services:
     image: postgres:16-alpine
     ports:
       - "5432:5432"
+    env_file:
+      - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U galleria"]
+      test: ["CMD-SHELL", "pg_isready -U gallerai"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -71,3 +78,4 @@ volumes:
   postgres_data:
   mongo_data:
   redis_data:
+  deepface_weights: 
