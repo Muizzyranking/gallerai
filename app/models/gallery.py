@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Enum,
     Float,
     ForeignKey,
     UniqueConstraint,
@@ -11,6 +12,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.enums import FlagReason
 from app.db import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
@@ -40,6 +42,11 @@ class UserEventGallery(BaseModel, TimestampMixin):
     )
     match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_flagged: Mapped[bool] = mapped_column(Boolean, default=False)
+    flag_reason: Mapped[FlagReason | None] = mapped_column(
+        Enum(FlagReason, values_callable=lambda x: [e.value for e in x]),
+        nullable=True,
+        comment="Reason the user flagged this photo — null if not flagged",
+    )
     flagged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Relationships
