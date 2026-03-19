@@ -1,6 +1,6 @@
 import logging
 
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.config import settings
 from app.services.face_service import find_matching_embeddings
@@ -9,10 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 async def search_event_for_user(
-    embeddings: list[float],
+    embedding: list[float],
     event_id: str,
-    db: AsyncIOMotorClient,
-    threshold: float | None = settings.face_similarity_threshold,
+    db: AsyncIOMotorDatabase,
+    threshold: float | None = None,
 ) -> dict[str, float]:
     """
     Search all the face embeddings in a particular event for mataches with the given embeddings.
@@ -20,6 +20,7 @@ async def search_event_for_user(
     Fetches all embeddings for event from mongodb, runs batched cosine_similarity, deduplicates photos,
     and returns a dict of photo_id to similarity score for all photos that have a match above the threshold.
     """
+    threshold = threshold or settings.face_similarity_threshold
 
     cursor = db["face_embeddings"].find(
         {"event_id": event_id}, {"photo_id": 1, "embedding": 1, "_id": 0}
@@ -31,7 +32,7 @@ async def search_event_for_user(
 
     logger.debug(f"Found {len(candidates)} candidate embeddings for event {event_id}")
 
-    matches = find_matching_embeddings(embeddings, candidates, threshold)
+    matches = find_matching_embeddings(embedding, candidates, threshold)
 
     best_per_photo: dict[str, float] = {}
     for match in matches:
