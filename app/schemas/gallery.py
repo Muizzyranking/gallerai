@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.core.enums import FlagReason
 from app.schemas.photo import PhotoSchema
 
 
@@ -38,4 +39,4 @@ class AnonymousGalleryResponse(BaseModel):
 
 
 class FlagPhotoRequest(BaseModel):
-    reason: str | None = None  # optional, for future moderation use
+    reason: FlagReason | None = None
