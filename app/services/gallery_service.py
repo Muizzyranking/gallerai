@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 SCAN_TOKEN_PREFIX = "scan:"
 
 
-async def store_anonymous_result(event_id: str, matches: dict[str, float]) -> str:
+async def store_anonymous_results(event_id: str, matches: dict[str, float]) -> str:
     """
     Store anonymous scan result in Redis with TTL.
     Returns a short-lived token that can be used to retrieve the results.
@@ -34,7 +34,7 @@ async def store_anonymous_result(event_id: str, matches: dict[str, float]) -> st
     return token
 
 
-async def get_anonymous_result_key(token: str, event_id: str) -> dict[str, float]:
+async def get_anonymous_results(token: str, event_id: str) -> dict[str, float]:
     """
     Returns annonymous scan results from redis by token.
     Validates the token belongs to the given event
@@ -112,7 +112,7 @@ async def claim_anonymous_gallery(
     Merge anonymous gallery results into the user's gallery and delete the anonymous token.
     Consumes the token, so it can only be used once.
     """
-    matches = await get_anonymous_result_key(token, event_id)
+    matches = await get_anonymous_results(token, event_id)
     new_count = upsert_gallery_entries(user, event_id, matches, db)
     await delete_anonymous_result_key(token)
     logger.info(
@@ -153,7 +153,7 @@ def get_user_gallery(
             photo=PhotoSchema.model_validate(entry.photo),
             match_score=entry.match_score,
             is_flagged=entry.is_flagged,
-            # flag_reason=entry.flagged_at,
+            flag_reason=entry.flag_reason,
             flagged_at=entry.flagged_at,
             created_at=entry.created_at,
         )
@@ -173,8 +173,8 @@ def flag_gallery_entry(
     user: User,
     event_id: str,
     photo_id: str,
-    reason: FlagReason,
     db: Session,
+    reason: FlagReason | None = None,
 ) -> UserEventGallery:
     """
     Soft-flag a gallery entry with a reason.
@@ -195,7 +195,7 @@ def flag_gallery_entry(
             detail="Gallery entry not found",
         )
     entry.is_flagged = True
-    # entry.flag_reason = reason
+    entry.flag_reason = reason
     entry.flagged_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(entry)
