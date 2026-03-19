@@ -162,6 +162,7 @@ def get_event_access(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+OptionalCurrentUser = Annotated[User | None, Depends(get_current_user_optional)]
 EventOr404 = Annotated[Event, Depends(get_event_or_404)]
 OrganizerEvent = Annotated[Event, Depends(require_event_organizer)]
 AccessibleEvent = Annotated[Event, Depends(get_event_access)]
