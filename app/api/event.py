@@ -25,8 +25,8 @@ router = APIRouter()
     response_model=ApiResponse[EventResponse],
     status_code=status.HTTP_201_CREATED,
 )
-def create_event(payload: EventCreate, current_user: CurrentUser, db: DB):
-    event = event_service.create_event(payload, current_user, db)
+async def create_event(payload: EventCreate, current_user: CurrentUser, db: DB):
+    event = await event_service.create_event(payload, current_user, db)
     return ApiResponse[EventResponse](
         message="Event created successfully",
         data=EventResponse.model_validate(event),
@@ -38,7 +38,7 @@ def create_event(payload: EventCreate, current_user: CurrentUser, db: DB):
     response_model=ApiResponse[list[EventResponse]],
     summary="List events I manage",
 )
-def list_managed_events(
+async def list_managed_events(
     current_user: CurrentUser,
     db: DB,
 ) -> ApiResponse[list[EventResponse]]:
@@ -46,10 +46,10 @@ def list_managed_events(
     Return all events the current user owns or co-organizes.
     Used for the organizer dashboard.
     """
-    events = event_service.get_managed_events(current_user, db)
+    events = await event_service.get_managed_events(current_user, db)
     return ApiResponse(
         message=f"{len(events)} event(s) found",
-        data=[EventResponse.model_validate(e) for e in events],
+        data=events,
     )
 
 
@@ -58,7 +58,7 @@ def list_managed_events(
     response_model=ApiResponse[list[EventResponse]],
     summary="List events I am attending",
 )
-def list_attended_events(
+async def list_attended_events(
     current_user: CurrentUser,
     db: DB,
 ) -> ApiResponse[list[EventResponse]]:
@@ -66,25 +66,15 @@ def list_attended_events(
     Return all events the current user is an attendee of.
     Does not include events the user organizes.
     """
-    events = event_service.get_attended_events(current_user, db)
+    events = await event_service.get_attended_events(current_user, db)
     return ApiResponse(
         message=f"{len(events)} event(s) found",
-        data=[EventResponse.model_validate(e) for e in events],
+        data=events,
     )
 
 
-# @router.get("", response_model=ApiResponse[list[EventResponse]])
-# def list_my_events(current_user: CurrentUser, db: DB):
-#     """Returns all events the current user owns or co-organizes."""
-#     events = event_service.get_event_list(current_user, db)
-#     return ApiResponse[list[EventResponse]](
-#         message="Events retrieved successfully",
-#         data=[EventResponse.model_validate(e) for e in events],
-#     )
-
-
 @router.get("/{event_id}", response_model=ApiResponse[EventResponse])
-def get_event(event: EventOr404):
+async def get_event(event: EventOr404):
     return ApiResponse[EventResponse](
         message="Event retrieved successfully",
         data=EventResponse.model_validate(event),
@@ -92,8 +82,8 @@ def get_event(event: EventOr404):
 
 
 @router.patch("/{event_id}", response_model=ApiResponse[EventResponse])
-def update_event(payload: EventUpdate, event: EventOr404, db: DB):
-    event = event_service.update_event(event, payload, db)
+async def update_event(payload: EventUpdate, event: EventOr404, db: DB):
+    event = await event_service.update_event(event, payload, db)
     return ApiResponse[EventResponse](
         message="Event updated successfully",
         data=EventResponse.model_validate(event),
@@ -101,25 +91,25 @@ def update_event(payload: EventUpdate, event: EventOr404, db: DB):
 
 
 @router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_event(event: OrganizerEvent, db: DB):
-    event_service.delete_event(event, db)
+async def delete_event(event: OrganizerEvent, db: DB):
+    await event_service.delete_event(event, db)
 
 
 @router.post("/{event_id}/access/verify", status_code=status.HTTP_200_OK)
-def verify_access(payload: EventAccessVerify, event: EventOr404):
+async def verify_access(payload: EventAccessVerify, event: EventOr404):
     """Verify an access code. Returns 200 if valid, 403 if not."""
     event_service.verify_event_access_code(event, payload.access_code)
     return {"message": "Access granted"}
 
 
 @router.post("/{event_id}/members", status_code=status.HTTP_201_CREATED)
-def add_co_organizer(
+async def add_co_organizer(
     payload: MemberAdd,
     event: OrganizerEvent,
     current_user: CurrentUser,
     db: DB,
 ):
-    member = event_service.add_co_organizer(event, payload, current_user, db)
+    member = await event_service.add_co_organizer(event, payload, current_user, db)
     return ApiResponse(
         message="Co-organizer added successfully",
         data={"member_id": member.id},
@@ -127,12 +117,12 @@ def add_co_organizer(
 
 
 @router.delete("/{event_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_member(
+async def remove_member(
     user_id: str,
     event: OrganizerEvent,
     db: DB,
 ):
-    event_service.remove_member(event, user_id, db)
+    await event_service.remove_member(event, user_id, db)
 
 
 @router.post("/{event_id}/invites", status_code=status.HTTP_201_CREATED)
@@ -151,7 +141,7 @@ def revoke_invite(email: str, event: OrganizerEvent, db: DB):
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Leave an event",
 )
-def leave_event(
+async def leave_event(
     event: EventOr404,
     current_user: CurrentUser,
     db: DB,
@@ -165,4 +155,4 @@ def leave_event(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Event owners cannot leave their own event. Delete the event instead.",
         )
-    event_service.remove_member(event, current_user.id, db)
+    await event_service.remove_member(event, current_user.id, db)
