@@ -1,7 +1,5 @@
-import hashlib
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -10,14 +8,6 @@ from app.models.face_embedding import FaceEmbedding
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-
-
-def compute_file_hash(file_path: str | Path) -> str:
-    hasher = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
 
 
 def _copy_embeddings(db: Session, source_photo_id: str, target_photo_id: str) -> int:
@@ -79,18 +69,20 @@ def process_photo_task(self, photo_id: str):
             logger.info(f"Photo {photo_id} already processed")
             return {"status": "already_processed"}
 
+        if not photo.file_hash:
+            logger.error(f"Photo {photo_id} missing file_hash")
+            mark_photo_as_failed(photo, "Missing file_hash", db)
+            db.commit()
+            return {"status": "failed", "reason": "missing_hash"}
+
         mark_photo_as_processing(photo, db)
         logger.info(f"Started processing photo ID {photo_id}")
 
-        image_path = storage.load(photo.storage_key)
-        file_hash = compute_file_hash(image_path)
-
-        # Check for duplicate in same event
         duplicate = (
             db.query(Photo)
             .filter(
                 Photo.event_id == photo.event_id,
-                Photo.file_hash == file_hash,
+                Photo.file_hash == photo.file_hash,
                 Photo.id != photo.id,
                 Photo.status == PhotoStatus.PROCESSED,
             )
@@ -100,12 +92,11 @@ def process_photo_task(self, photo_id: str):
         if duplicate:
             logger.info(f"Photo {photo_id} is duplicate of {duplicate.id}")
             face_count = _copy_embeddings(db, duplicate.id, photo.id)
-            photo.file_hash = file_hash
             mark_photo_as_processed(photo, face_count=face_count, db=db)
             db.commit()
             return {"status": "duplicate", "original_id": duplicate.id}
 
-        photo.file_hash = file_hash
+        image_path = storage.load(photo.storage_key)
         faces = detect_faces(image_path)
         logger.info(f"Photo {photo_id} — detected {len(faces)} valid faces")
 
