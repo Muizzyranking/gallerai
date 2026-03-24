@@ -98,6 +98,41 @@ def verify_event_access_code(event: Event, access_code: str | None) -> Literal[T
     return True
 
 
+def grant_attendee_membership(
+    event: Event,
+    user: User,
+    db: Session,
+) -> EventMember:
+    """
+    Add a user as an attendee member of an event.
+    If they were previously removed, reactivates their membership.
+    Called after successful access verification for logged-in users.
+    """
+    existing = (
+        db.query(EventMember)
+        .filter(EventMember.event_id == event.id, EventMember.user_id == user.id)
+        .first()
+    )
+    if existing:
+        if existing.status == MemberStatus.ACTIVE:
+            return existing
+        existing.status = MemberStatus.ACTIVE
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    member = EventMember(
+        event_id=event.id,
+        user_id=user.id,
+        role=EventRole.ATTENDEE,
+        added_by=None,
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+    return member
+
+
 def add_co_organizer(
     event: Event, payload: MemberAdd, added_by: User, db: Session
 ) -> EventMember:
