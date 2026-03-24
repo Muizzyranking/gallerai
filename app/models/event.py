@@ -10,7 +10,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import (
@@ -31,6 +31,14 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+DEFAULT_EVENT_SETTINGS = {
+    "allow_attendee_uploads": False,
+    "require_upload_approval": True,
+    "downloads_enabled": True,
+    "gallery_visible": True,
+}
+
+
 class Event(BaseModel, TimestampMixin):
     __tablename__ = "events"
 
@@ -41,20 +49,25 @@ class Event(BaseModel, TimestampMixin):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     event_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cover_photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # active | archived | deleted
     status: Mapped[EventStatus] = mapped_column(
         Enum(EventStatus, values_callable=lambda x: [e.value for e in x]),
         default=EventStatus.ACTIVE,
         nullable=False,
     )
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
-    # link | code | approved_list | combined
     access_mode: Mapped[AccessMode] = mapped_column(
         Enum(AccessMode, values_callable=lambda x: [e.value for e in x]),
         default=AccessMode.LINK,
         nullable=False,
     )
     access_code_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    settings: Mapped[dict] = mapped_column(
+        JSONB,
+        default=lambda: DEFAULT_EVENT_SETTINGS.copy(),
+        server_default="{}",
+        nullable=False,
+        comment="Flexible event configuration — see DEFAULT_EVENT_SETTINGS for available keys",
+    )
 
     # Relationships
     owner: Mapped["User"] = relationship(
