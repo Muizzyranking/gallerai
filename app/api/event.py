@@ -1,4 +1,4 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.dependencies import (
     DB,
@@ -120,7 +120,10 @@ def add_co_organizer(
     db: DB,
 ):
     member = event_service.add_co_organizer(event, payload, current_user, db)
-    return {"message": "Co-organizer added", "member_id": member.id}
+    return ApiResponse(
+        message="Co-organizer added successfully",
+        data={"member_id": member.id},
+    )
 
 
 @router.delete("/{event_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -141,3 +144,25 @@ def add_invites(payload: InviteCreate, event: OrganizerEvent, db: DB):
 @router.delete("/{event_id}/invites/{email}", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_invite(email: str, event: OrganizerEvent, db: DB):
     event_service.revoke_invite(event, email, db)
+
+
+@router.delete(
+    "/{event_id}/leave",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Leave an event",
+)
+def leave_event(
+    event: EventOr404,
+    current_user: CurrentUser,
+    db: DB,
+) -> None:
+    """
+    Leave an event as an attendee.
+    Owners cannot leave their own event — they must delete it or transfer ownership.
+    """
+    if event.owner_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event owners cannot leave their own event. Delete the event instead.",
+        )
+    event_service.remove_member(event, current_user.id, db)
