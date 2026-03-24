@@ -33,14 +33,54 @@ def create_event(payload: EventCreate, current_user: CurrentUser, db: DB):
     )
 
 
-@router.get("", response_model=ApiResponse[list[EventResponse]])
-def list_my_events(current_user: CurrentUser, db: DB):
-    """Returns all events the current user owns or co-organizes."""
-    events = event_service.get_event_list(current_user, db)
-    return ApiResponse[list[EventResponse]](
-        message="Events retrieved successfully",
+@router.get(
+    "",
+    response_model=ApiResponse[list[EventResponse]],
+    summary="List events I manage",
+)
+def list_managed_events(
+    current_user: CurrentUser,
+    db: DB,
+) -> ApiResponse[list[EventResponse]]:
+    """
+    Return all events the current user owns or co-organizes.
+    Used for the organizer dashboard.
+    """
+    events = event_service.get_managed_events(current_user, db)
+    return ApiResponse(
+        message=f"{len(events)} event(s) found",
         data=[EventResponse.model_validate(e) for e in events],
     )
+
+
+@router.get(
+    "/attending",
+    response_model=ApiResponse[list[EventResponse]],
+    summary="List events I am attending",
+)
+def list_attended_events(
+    current_user: CurrentUser,
+    db: DB,
+) -> ApiResponse[list[EventResponse]]:
+    """
+    Return all events the current user is an attendee of.
+    Does not include events the user organizes.
+    """
+    events = event_service.get_attended_events(current_user, db)
+    return ApiResponse(
+        message=f"{len(events)} event(s) found",
+        data=[EventResponse.model_validate(e) for e in events],
+    )
+
+
+# @router.get("", response_model=ApiResponse[list[EventResponse]])
+# def list_my_events(current_user: CurrentUser, db: DB):
+#     """Returns all events the current user owns or co-organizes."""
+#     events = event_service.get_event_list(current_user, db)
+#     return ApiResponse[list[EventResponse]](
+#         message="Events retrieved successfully",
+#         data=[EventResponse.model_validate(e) for e in events],
+#     )
 
 
 @router.get("/{event_id}", response_model=ApiResponse[EventResponse])
