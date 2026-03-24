@@ -9,6 +9,7 @@ from app.api.dependencies import (
     CurrentUser,
     OrganizerEvent,
 )
+from app.core.enums import PhotoStatus
 from app.core.schemas import ApiResponse
 from app.schemas.photo import (
     PhotoBulkUploadResponse,
@@ -50,6 +51,46 @@ async def bulk_upload_photos(
 
     return ApiResponse[PhotoBulkUploadResponse](
         message="Photos uploaded successfully",
+        data=PhotoBulkUploadResponse(accepted=len(photo_ids), photo_ids=photo_ids),
+    )
+
+
+@router.post(
+    "/attendee",
+    response_model=ApiResponse[PhotoBulkUploadResponse],
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload photos as an attendee",
+)
+async def attendee_upload_photos(
+    event: AccessibleEvent,
+    current_user: CurrentUser,
+    db: DB,
+    files: Annotated[list[UploadFile], File(description="One or more image files")],
+) -> ApiResponse[PhotoBulkUploadResponse]:
+    """
+    Upload photos as an attendee.
+    Requires event setting allow_attendee_uploads=True.
+    If require_upload_approval=True, photos go to pending_approval state
+    and must be approved by organizer before processing.
+    """
+    if not event.settings.get("allow_attendee_uploads", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This event does not allow attendee uploads",
+        )
+
+    photo_ids = []
+    for file in files:
+        photo = await photo_service.create_photo_record(
+            file, event, current_user, db, is_attendee_upload=True
+        )
+        photo_ids.append(photo.id)
+        # Only dispatch processing if no approval required
+        if photo.status == PhotoStatus.PENDING:
+            process_photo_task.delay(photo.id)  # type: ignore
+
+    return ApiResponse(
+        message=f"{len(photo_ids)} photo(s) uploaded",
         data=PhotoBulkUploadResponse(accepted=len(photo_ids), photo_ids=photo_ids),
     )
 
