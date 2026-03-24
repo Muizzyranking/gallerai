@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     face_min_size: int = 80  # minimum face bounding box size in pixels
     anonymous_scan_ttl_seconds: int = 7200  # 2 hours
 
+    default_cache_ttl: int = 300  # 5 min
+
 
 @lru_cache
 def get_settings() -> Settings:
