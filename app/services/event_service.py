@@ -11,7 +11,7 @@ from app.core.enums import (
     MemberStatus,
 )
 from app.core.security import hash_value, verify_hash
-from app.models.event import Event, EventInvite, EventMember
+from app.models.event import DEFAULT_EVENT_SETTINGS, Event, EventInvite, EventMember
 from app.models.user import User
 from app.schemas import MemberAdd
 from app.schemas.event import EventCreate, EventUpdate, InviteCreate
@@ -36,6 +36,7 @@ def create_event(payload: EventCreate, owner: User, db: Session) -> Event:
         event_date=payload.event_date,
         access_mode=payload.access_config.access_mode,
         access_code_hash=access_code_hash,
+        settings={**DEFAULT_EVENT_SETTINGS, **payload.settings.model_dump()},
     )
     db.add(event)
     db.flush()
@@ -67,6 +68,8 @@ def update_event(event: Event, payload: EventUpdate, db: Session) -> Event:
                 detail="Use the delete endpoint to delete an event",
             )
         event.status = payload.status
+    if payload.settings is not None:
+        event.settings = {**event.settings, **payload.settings.model_dump()}
     db.commit()
     db.refresh(event)
     return event
@@ -273,28 +276,73 @@ def revoke_invite(event: Event, email: str, db: Session) -> None:
 
 
 def get_event_list(owner: User, db: Session) -> list[Event]:
-    owned = (
-        db.query(Event)
-        .filter(Event.owner_id == owner.id, Event.status != EventStatus.DELETED)
-        .all()
-    )
-    owned_ids = [e.id for e in owned]
-    co_organized_ids = (
-        db.query(EventMember.event_id)
+    """
+    Return all events the user owns, co-organizes, or is an active attendee of.
+    """
+    memberships = (
+        db.query(EventMember)
         .filter(
             EventMember.user_id == owner.id,
-            EventMember.role == EventRole.ORGANIZER,
             EventMember.status == MemberStatus.ACTIVE,
-            EventMember.event_id.notin_(owned_ids),
         )
         .all()
     )
-    co_organized_ids = [r[0] for r in co_organized_ids]
-    co_organized = (
+    event_ids = [m.event_id for m in memberships]
+    if not event_ids:
+        return []
+    return (
         db.query(Event)
-        .filter(Event.id.in_(co_organized_ids), Event.status != EventStatus.DELETED)
+        .filter(Event.id.in_(event_ids), Event.status != EventStatus.DELETED)
+        .order_by(Event.created_at.desc())
         .all()
-        if co_organized_ids
-        else []
     )
-    return owned + co_organized
+
+
+def get_managed_events(user: User, db: Session) -> list[Event]:
+    """
+    Return events the user owns or co-organizes.
+    Used for the organizer dashboard view.
+    """
+    memberships = (
+        db.query(EventMember)
+        .filter(
+            EventMember.user_id == user.id,
+            EventMember.role == EventRole.ORGANIZER,
+            EventMember.status == MemberStatus.ACTIVE,
+        )
+        .all()
+    )
+    event_ids = [m.event_id for m in memberships]
+    if not event_ids:
+        return []
+    return (
+        db.query(Event)
+        .filter(Event.id.in_(event_ids), Event.status != EventStatus.DELETED)
+        .order_by(Event.created_at.desc())
+        .all()
+    )
+
+
+def get_attended_events(user: User, db: Session) -> list[Event]:
+    """
+    Return events the user is an attendee of (not organizer).
+    Used for the attendee "my events" view.
+    """
+    memberships = (
+        db.query(EventMember)
+        .filter(
+            EventMember.user_id == user.id,
+            EventMember.role == EventRole.ATTENDEE,
+            EventMember.status == MemberStatus.ACTIVE,
+        )
+        .all()
+    )
+    event_ids = [m.event_id for m in memberships]
+    if not event_ids:
+        return []
+    return (
+        db.query(Event)
+        .filter(Event.id.in_(event_ids), Event.status != EventStatus.DELETED)
+        .order_by(Event.created_at.desc())
+        .all()
+    )
