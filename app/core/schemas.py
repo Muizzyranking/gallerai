@@ -13,3 +13,23 @@ class ApiResponse[T](BaseModel):
         from_attributes=True,
         populate_by_name=True,
     )
+
+
+class ValidationErrorDetail(BaseModel):
+    field: str
+    message: str
+    type: str
+
+
+class ApiErrorResponse[T](BaseModel):
+    message: str
+    data: None = None
+    errors: T | None = None
+
+
+class NotFoundResponse(BaseModel):
+    message: str = "Resource not found"
+
+
+class BadRequestResponse(BaseModel):
+    message: str = "Bad request"
