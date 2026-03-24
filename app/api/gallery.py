@@ -10,7 +10,7 @@ from app.schemas.gallery import (
     FlagPhotoRequest,
     GalleryResponse,
 )
-from app.schemas.photo import PhotoSchema
+from app.schemas.photo import PhotoResponse, PhotoSchema
 from app.services import gallery_service
 from app.services.photo_service import get_event_photos
 
@@ -19,7 +19,7 @@ router = APIRouter()
 
 @router.get(
     "",
-    response_model=ApiResponse[list[PhotoSchema]],
+    response_model=ApiResponse[PhotoResponse],
     summary="Full event gallery — all non-private photos",
 )
 def get_full_gallery(
@@ -32,10 +32,10 @@ def get_full_gallery(
     Return all non-private photos for an event.
     Requires valid event access. Paginated.
     """
-    photos, total = get_event_photos(event.id, db, page, page_size)
+    photos = get_event_photos(event.id, db, page, page_size)
     return ApiResponse(
-        message=f"{total} photos found",
-        data=[PhotoSchema.model_validate(p) for p in photos],
+        message="Gallery retrieved successfully",
+        data=photos,
     )
 
 
