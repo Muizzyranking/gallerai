@@ -134,6 +134,67 @@ def get_processing_status(event: OrganizerEvent, db: DB):
 
 
 @router.get(
+    "/pending-approval",
+    response_model=ApiResponse[PhotoResponse],
+    summary="List photos awaiting approval",
+)
+def list_pending_approval(
+    event: OrganizerEvent,
+    db: DB,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ApiResponse[PhotoResponse]:
+    """Return photos awaiting organizer approval. Organizer only."""
+    photos, total = photo_service.get_pending_approval_photos(
+        event.id, db, page, page_size
+    )
+    return ApiResponse(
+        message=f"{total} photos pending approval",
+        data=PhotoResponse(
+            total=total,
+            photos=[PhotoSchema.model_validate(p) for p in photos],
+        ),
+    )
+
+
+@router.post(
+    "/{photo_id}/approve",
+    response_model=ApiResponse[PhotoSchema],
+    summary="Approve a pending photo",
+)
+def approve_photo(
+    photo_id: str,
+    event: OrganizerEvent,
+    db: DB,
+) -> ApiResponse[PhotoSchema]:
+    """Approve an attendee-uploaded photo and dispatch it for processing."""
+    photo = photo_service.approve_photo(photo_id, event, db)
+    process_photo_task.delay(photo.id)  # type: ignore
+    return ApiResponse(
+        message="Photo approved and queued for processing",
+        data=PhotoSchema.model_validate(photo),
+    )
+
+
+@router.post(
+    "/{photo_id}/reject",
+    response_model=ApiResponse[PhotoSchema],
+    summary="Reject a pending photo",
+)
+def reject_photo(
+    photo_id: str,
+    event: OrganizerEvent,
+    db: DB,
+) -> ApiResponse[PhotoSchema]:
+    """Reject an attendee-uploaded photo. Soft-kept for audit."""
+    photo = photo_service.reject_photo(photo_id, event, db)
+    return ApiResponse(
+        message="Photo rejected",
+        data=PhotoSchema.model_validate(photo),
+    )
+
+
+@router.get(
     "/serve/{photo_id}", summary="Serve a photo file", response_class=FileResponse
 )
 def serve_photo(photo_id: str, event: AccessibleEvent, db: DB) -> FileResponse:

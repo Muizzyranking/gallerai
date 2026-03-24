@@ -140,6 +140,58 @@ def get_event_photos(
     )
 
 
+def get_pending_approval_photos(
+    event_id: str,
+    db: Session,
+    page: int = 1,
+    page_size: int = 50,
+) -> tuple[list[Photo], int]:
+    """Return photos awaiting organizer approval. Organizer only."""
+    query = (
+        db.query(Photo)
+        .filter(
+            Photo.event_id == event_id,
+            Photo.status == PhotoStatus.PENDING_APPROVAL,
+        )
+        .order_by(Photo.created_at.asc())
+    )
+    total = query.count()
+    photos = query.offset((page - 1) * page_size).limit(page_size).all()
+    return photos, total
+
+
+def get_pending_approval_photo(photo_id: str, event: Event, db: Session) -> Photo:
+    photo = get_photo_or_404(photo_id, event.id, db)
+    if photo.status != PhotoStatus.PENDING_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Photo is not pending approval (current status: {photo.status})",
+        )
+    return photo
+
+
+def approve_photo(photo_id: str, event: Event, db: Session) -> Photo:
+    """
+    Approve a pending photo — sets status to pending so Celery picks it up.
+    """
+    photo = get_pending_approval_photo(photo_id, event, db)
+    photo.status = PhotoStatus.PENDING
+    db.commit()
+    db.refresh(photo)
+    return photo
+
+
+def reject_photo(photo_id: str, event: Event, db: Session) -> Photo:
+    """
+    Reject a pending photo — marks as rejected (soft delete).
+    """
+    photo = get_pending_approval_photo(photo_id, event, db)
+    photo.status = PhotoStatus.REJECTED
+    db.commit()
+    db.refresh(photo)
+    return photo
+
+
 def set_photo_privacy(
     photo_id: str, is_private: bool, event: Event, db: Session
 ) -> Photo:
