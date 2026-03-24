@@ -95,18 +95,15 @@ def get_processing_status(event_id: str, db: Session) -> ProcessingStatusRespons
     photos = db.query(Photo).filter(Photo.event_id == event_id).all()
     counts = {s: 0 for s in PhotoStatus}
 
-    pending = counts[PhotoStatus.PENDING]
-    processing = counts[PhotoStatus.PROCESSING]
-    processed = counts[PhotoStatus.PROCESSED]
-    failed = counts[PhotoStatus.FAILED]
-
     return ProcessingStatusResponse(
         event_id=event_id,
         total=len(photos),
-        pending=pending,
-        processing=processing,
-        processed=processed,
-        failed=failed,
+        pending=counts[PhotoStatus.PENDING],
+        processing=counts[PhotoStatus.PROCESSING],
+        processed=counts[PhotoStatus.PROCESSED],
+        failed=counts[PhotoStatus.FAILED],
+        pending_approval=counts[PhotoStatus.PENDING_APPROVAL],
+        rejected=counts[PhotoStatus.REJECTED],
     )
 
 
