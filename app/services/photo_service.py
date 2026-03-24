@@ -24,13 +24,17 @@ def _get_image_dimensions(key: str) -> tuple[int | None, int | None]:
 
 
 async def create_photo_record(
-    file: UploadFile, event: Event, uploader: User, db: Session
+    file: UploadFile,
+    event: Event,
+    uploader: User,
+    db: Session,
+    is_attendee_upload: bool = False,
 ) -> Photo:
     """
     Create a Photo record in the database after saving the file to storage.
     """
     try:
-        key = await storage.save(file, event_id=event.id)
+        key = await storage.save(file, event.id, subfolder="photos")
     except InvalidFileType as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
@@ -42,6 +46,11 @@ async def create_photo_record(
 
     width, height = _get_image_dimensions(key)
 
+    if is_attendee_upload and event.settings.get("require_upload_approval", True):
+        initial_status = PhotoStatus.PENDING_APPROVAL
+    else:
+        initial_status = PhotoStatus.PENDING
+
     photo = Photo(
         event_id=event.id,
         uploaded_by=uploader.id,
@@ -50,7 +59,7 @@ async def create_photo_record(
         file_size=file.size,
         width=width,
         height=height,
-        status=PhotoStatus.PENDING,
+        status=initial_status,
         mime_type=file.content_type,
     )
 
