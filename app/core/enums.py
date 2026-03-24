@@ -31,6 +31,17 @@ class InviteStatus(str, enum.Enum):
 
 
 class PhotoStatus(str, enum.Enum):
+    """
+    pending_approval: attendee upload awaiting organizer approval
+    rejected: organizer rejected the upload — soft kept for audit
+    pending: approved and queued for face processing
+    processing: Celery worker currently processing
+    processed: face detection complete
+    failed: face detection failed after all retries
+    """
+
+    PENDING_APPROVAL = "pending_approval"
+    REJECTED = "rejected"
     PENDING = "pending"
     PROCESSING = "processing"
     PROCESSED = "processed"
