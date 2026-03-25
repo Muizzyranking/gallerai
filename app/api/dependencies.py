@@ -203,8 +203,28 @@ def get_event_access(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
 
+def require_admin(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    """
+    Require the current user to be an admin.
+    Raises 403 if the user does not have is_admin=True.
+    Also checks is_active — deactivated admins lose access.
+    """
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated",
+        )
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return current_user
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
 OptionalCurrentUser = Annotated[User | None, Depends(get_current_user_optional)]
 EventOr404 = Annotated[Event, Depends(get_event_or_404)]
 OrganizerEvent = Annotated[Event, Depends(require_event_organizer)]
 AccessibleEvent = Annotated[Event, Depends(get_event_access)]
+AdminUser = Annotated[User, Depends(require_admin)]
