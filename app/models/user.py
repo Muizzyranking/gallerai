@@ -1,19 +1,15 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import (
-    ARRAY,
-    DateTime,
-    Float,
-    String,
-)
+from sqlalchemy import ARRAY, Boolean, DateTime, Float, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import BaseModel, TimestampMixin
+from app.db.postgres import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.event import Event, EventMember
     from app.models.gallery import UserEventGallery
+    from app.models.tokens import RefreshToken
 
 
 class User(BaseModel, TimestampMixin):
@@ -27,7 +23,14 @@ class User(BaseModel, TimestampMixin):
     face_embedding: Mapped[list[float] | None] = mapped_column(
         ARRAY(Float), nullable=True
     )
-    face_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    face_scan_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    face_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # Relationships
     owned_events: Mapped[list["Event"]] = relationship(
@@ -38,4 +41,7 @@ class User(BaseModel, TimestampMixin):
     )
     gallery_entries: Mapped[list["UserEventGallery"]] = relationship(
         "UserEventGallery", back_populates="user"
+    )
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        "RefreshToken", back_populates="user", cascade="all, delete-orphan"
     )
