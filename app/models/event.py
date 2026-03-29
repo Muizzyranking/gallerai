@@ -23,6 +23,7 @@ from app.core.enums import (
 from app.db import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.face_embedding import FaceEmbedding
     from app.models.photo import Photo
     from app.models.user import User
 
@@ -79,6 +80,9 @@ class Event(BaseModel, TimestampMixin):
     )
     invites: Mapped[list["EventInvite"]] = relationship(
         "EventInvite", back_populates="event"
+    )
+    face_embeddings: Mapped[list["FaceEmbedding"]] = relationship(
+        "FaceEmbedding", back_populates="event", cascade="all, delete-orphan"
     )
 
 

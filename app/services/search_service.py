@@ -1,49 +1,52 @@
 import logging
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.services.face_service import find_matching_embeddings
 
 logger = logging.getLogger(__name__)
 
 
-async def search_event_for_user(
+def search_event_for_user(
+    db: Session,
     embedding: list[float],
     event_id: str,
-    db: AsyncIOMotorDatabase,
     threshold: float | None = None,
+    limit: int = 1000,
 ) -> dict[str, float]:
     """
-    Search all the face embeddings in a particular event for mataches with the given embeddings.
-
-    Fetches all embeddings for event from mongodb, runs batched cosine_similarity, deduplicates photos,
-    and returns a dict of photo_id to similarity score for all photos that have a match above the threshold.
+    Search faces in event using pgvector cosine similarity.
+    Returns: {photo_id: best_similarity_score}
     """
     threshold = threshold or settings.face_similarity_threshold
 
-    cursor = db["face_embeddings"].find(
-        {"event_id": event_id}, {"photo_id": 1, "embedding": 1, "_id": 0}
+    stmt = text("""
+        SELECT 
+            photo_id::text as photo_id,
+            MAX(1 - (embedding <=> :query_vec)) as similarity
+        FROM face_embeddings
+        WHERE event_id = :event_id
+          AND 1 - (embedding <=> :query_vec) > :threshold
+        GROUP BY photo_id
+        ORDER BY similarity DESC
+        LIMIT :limit
+    """)
+
+    result = db.execute(
+        stmt,
+        {
+            "query_vec": str(embedding),
+            "event_id": event_id,
+            "threshold": threshold,
+            "limit": limit,
+        },
     )
-    candidates = await cursor.to_list(length=None)
-    if not candidates:
-        logger.debug(f"No embeddings found for event -{event_id}")
-        return {}
 
-    logger.debug(f"Found {len(candidates)} candidate embeddings for event {event_id}")
-
-    matches = find_matching_embeddings(embedding, candidates, threshold)
-
-    best_per_photo: dict[str, float] = {}
-    for match in matches:
-        photo_id = match["photo_id"]
-        score = match["score"]
-        if (photo_id not in best_per_photo) or (score > best_per_photo[photo_id]):
-            best_per_photo[photo_id] = score
+    matches = {row.photo_id: float(row.similarity) for row in result}
 
     logger.info(
         f"Search complete — event={event_id} "
-        f"candidates={len(candidates)} "
-        f"matched_photos={len(best_per_photo)}"
+        f"matched_photos={len(matches)} threshold={threshold}"
     )
-    return best_per_photo
+    return matches

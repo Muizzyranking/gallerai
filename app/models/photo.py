@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -18,11 +19,15 @@ from app.db.postgres import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.event import Event
+    from app.models.face_embedding import FaceEmbedding
     from app.models.gallery import UserEventGallery
 
 
 class Photo(BaseModel, TimestampMixin):
     __tablename__ = "photos"
+    __table_args__ = (
+        UniqueConstraint("event_id", "file_hash", name="uq_photos_event_file_hash"),
+    )
 
     event_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -33,6 +38,7 @@ class Photo(BaseModel, TimestampMixin):
     uploaded_by: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("users.id"), nullable=True
     )
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -56,6 +62,9 @@ class Photo(BaseModel, TimestampMixin):
 
     # Relationships
     event: Mapped["Event"] = relationship("Event", back_populates="photos")
+    faces: Mapped[list["FaceEmbedding"]] = relationship(
+        "FaceEmbedding", back_populates="photo", cascade="all, delete-orphan"
+    )
     gallery_entries: Mapped[list["UserEventGallery"]] = relationship(
         "UserEventGallery", back_populates="photo"
     )
