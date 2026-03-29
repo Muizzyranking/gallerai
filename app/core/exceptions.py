@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,20 @@ def _error_response(
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Register all global exception handlers on the FastAPI app."""
+
+    @app.exception_handler(StarletteHTTPException)
+    async def starlette_exception_handler(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        """Handle Starlette HTTPExceptions."""
+        if exc.status_code == 404:
+            message = f"Path not found: {request.url.path}"
+        elif exc.status_code == 405:
+            message = f"Method {request.method} not allowed for {request.url.path}"
+        else:
+            message = exc.detail or "Request failed"
+
+        return _error_response(exc.status_code, message)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(
