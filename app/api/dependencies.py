@@ -4,7 +4,13 @@ from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.core.enums import AccessMode, EventRole, InviteStatus, MemberStatus
+from app.core.enums import (
+    AccessMode,
+    EventRole,
+    EventStatus,
+    InviteStatus,
+    MemberStatus,
+)
 from app.core.security import decode_access_token_for_user, verify_hash
 from app.db import get_db
 from app.models.event import Event, EventInvite, EventMember
@@ -57,8 +63,11 @@ def get_current_user_optional(credentials: Credentials, db: DB) -> User | None:
 
 def get_event_or_404(event_id: str, db: DB) -> Event:
     """Fetch event by ID or raise 404."""
+
     event = (
-        db.query(Event).filter(Event.id == event_id, Event.status != "deleted").first()
+        db.query(Event)
+        .filter(Event.id == event_id, Event.status != EventStatus.DELETED)
+        .first()
     )
     if not event:
         raise HTTPException(
@@ -125,7 +134,7 @@ def user_is_active_member(db: Session, event_id: str, user_id: str) -> bool:
     )
 
 
-def get_event_access(
+async def get_event_access(
     event: Annotated[Event, Depends(get_event_or_404)],
     current_user: Annotated[User | None, Depends(get_current_user_optional)],
     access_code: Annotated[str | None, Query(description="Event access code")] = None,
@@ -144,7 +153,7 @@ def get_event_access(
     - No membership record created
 
     Auto-grant rules by access mode:
-    - link: auto-grant membership (explicit "add to list" is a UI concern)
+    - link: auto-grant membership
     - code: grant after successful code verification
     - approved_list: grant after invite check
     - combined: grant after either invite check or code verification
@@ -157,7 +166,7 @@ def get_event_access(
     # Link mode
     if event.access_mode == AccessMode.LINK:
         if current_user:
-            grant_attendee_membership(event, current_user, db)
+            await grant_attendee_membership(event, current_user, db)
         return event
 
     # Code mode
@@ -168,7 +177,7 @@ def get_event_access(
                 detail="Invalid access code",
             )
         if current_user:
-            grant_attendee_membership(event, current_user, db)
+            await grant_attendee_membership(event, current_user, db)
         return event
 
     # Approved list mode
@@ -183,13 +192,13 @@ def get_event_access(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not on the approved list",
             )
-        grant_attendee_membership(event, current_user, db)
+        await grant_attendee_membership(event, current_user, db)
         return event
 
     # Combined mode
     if event.access_mode == AccessMode.COMBINED:
         if current_user and user_is_invited(db, event.id, current_user.email):
-            grant_attendee_membership(event, current_user, db)
+            await grant_attendee_membership(event, current_user, db)
             return event
         if not valid_access_code(event, access_code):
             raise HTTPException(
@@ -197,7 +206,7 @@ def get_event_access(
                 detail="Invalid access code",
             )
         if current_user:
-            grant_attendee_membership(event, current_user, db)
+            await grant_attendee_membership(event, current_user, db)
         return event
 
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
