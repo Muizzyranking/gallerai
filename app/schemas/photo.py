@@ -33,6 +33,7 @@ class PhotoResponse(BaseModel):
 
 
 class PhotoBulkUploadResponse(BaseModel):
+    skipped: int = 0
     accepted: int
     photo_ids: list[str]
 
@@ -48,3 +49,7 @@ class ProcessingStatusResponse(BaseModel):
 
 class PhotoUpdateRequest(BaseModel):
     is_private: bool | None = None
+
+
+class PhotosDownload(BaseModel):
+    photo_ids: list[str]
