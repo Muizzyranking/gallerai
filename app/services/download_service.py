@@ -79,6 +79,72 @@ def get_gallery_photos_for_download(
     return photos
 
 
+def get_photos_from_id(event_id: str, photo_ids: list[str], db: Session):
+    entries = (
+        db.query(UserEventGallery)
+        .options(joinedload(UserEventGallery.photo))
+        .filter(
+            UserEventGallery.event_id == event_id,
+            UserEventGallery.photo_id.in_(photo_ids),
+            UserEventGallery.is_flagged == False,  # noqa: E712
+        )
+        .all()
+    )
+    photo_map = {
+        entry.photo_id: entry.photo
+        for entry in entries
+        if entry.photo and not entry.photo.is_private
+    }
+
+    photos = [photo_map[pid] for pid in photo_ids if pid in photo_map]
+    if not photos:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No valid photos found for download",
+        )
+
+    missing = len(photo_ids) - len(photos)
+    if missing > 0:
+        logger.warning(
+            f"Skipped {missing} photos (private, flagged, or not in gallery)"
+        )
+
+    return photos
+
+def get_photos_from_id(user: User, event_id: str, photo_ids: list[str], db: Session):
+    entries = (
+        db.query(UserEventGallery)
+        .options(joinedload(UserEventGallery.photo))
+        .filter(
+            UserEventGallery.user_id == user.id,
+            UserEventGallery.event_id == event_id,
+            UserEventGallery.photo_id.in_(photo_ids),
+            UserEventGallery.is_flagged == False,  # noqa: E712
+        )
+        .all()
+    )
+    photo_map = {
+        entry.photo_id: entry.photo
+        for entry in entries
+        if entry.photo and not entry.photo.is_private
+    }
+
+    photos = [photo_map[pid] for pid in photo_ids if pid in photo_map]
+    if not photos:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No valid photos found for download",
+        )
+
+    missing = len(photo_ids) - len(photos)
+    if missing > 0:
+        logger.warning(
+            f"Skipped {missing} photos (private, flagged, or not in gallery)"
+        )
+
+    return photos
+
+
 async def stream_zip(
     photos: list[Photo],
     zip_filename: str = "galleria-photos.zip",
