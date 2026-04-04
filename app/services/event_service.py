@@ -1,8 +1,10 @@
+import asyncio
 from typing import Literal
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.cache import event_cache, event_list_cache
 from app.core.enums import (
     AccessMode,
     EventRole,
@@ -14,10 +16,10 @@ from app.core.security import hash_value, verify_hash
 from app.models.event import DEFAULT_EVENT_SETTINGS, Event, EventInvite, EventMember
 from app.models.user import User
 from app.schemas import MemberAdd
-from app.schemas.event import EventCreate, EventUpdate, InviteCreate
+from app.schemas.event import EventCreate, EventResponse, EventUpdate, InviteCreate
 
 
-def create_event(payload: EventCreate, owner: User, db: Session) -> Event:
+async def create_event(payload: EventCreate, owner: User, db: Session) -> Event:
     access_code_hash = None
 
     if payload.access_config.access_mode in (AccessMode.CODE, AccessMode.COMBINED):
@@ -51,10 +53,11 @@ def create_event(payload: EventCreate, owner: User, db: Session) -> Event:
     db.add(member)
     db.commit()
     db.refresh(event)
+    await event_list_cache.invalidate(f"managed:{owner.id}")
     return event
 
 
-def update_event(event: Event, payload: EventUpdate, db: Session) -> Event:
+async def update_event(event: Event, payload: EventUpdate, db: Session) -> Event:
     if payload.title is not None:
         event.title = payload.title
     if payload.description is not None:
@@ -72,15 +75,25 @@ def update_event(event: Event, payload: EventUpdate, db: Session) -> Event:
         event.settings = {**event.settings, **payload.settings.model_dump()}
     db.commit()
     db.refresh(event)
+    await asyncio.gather(
+        event_cache.invalidate(f"detail:{event.id}"),
+        event_list_cache.invalidate(f"managed:{event.owner_id}"),
+    )
     return event
 
 
-def delete_event(event: Event, db: Session) -> None:
+async def delete_event(event: Event, db: Session) -> None:
     event.status = EventStatus.DELETED
     db.commit()
+    await asyncio.gather(
+        event_cache.invalidate(f"detail:{event.id}"),
+        event_list_cache.invalidate(f"managed:{event.owner_id}"),
+    )
 
 
-def verify_event_access_code(event: Event, access_code: str | None) -> Literal[True]:
+def verify_event_access_code(
+    event: EventResponse, access_code: str | None
+) -> Literal[True]:
     """
     Verifies the access code an event.
     Checks if the events allows code and the validity of the code.
@@ -101,7 +114,7 @@ def verify_event_access_code(event: Event, access_code: str | None) -> Literal[T
     return True
 
 
-def grant_attendee_membership(
+async def grant_attendee_membership(
     event: Event,
     user: User,
     db: Session,
@@ -133,10 +146,11 @@ def grant_attendee_membership(
     db.add(member)
     db.commit()
     db.refresh(member)
+    await event_list_cache.invalidate(f"attended:{user.id}")
     return member
 
 
-def add_co_organizer(
+async def add_co_organizer(
     event: Event, payload: MemberAdd, added_by: User, db: Session
 ) -> EventMember:
     user_id = payload.user_id
@@ -202,10 +216,11 @@ def add_co_organizer(
     db.add(member)
     db.commit()
     db.refresh(member)
+    await event_list_cache.invalidate(f"managed:{user_id}")
     return member
 
 
-def remove_member(event: Event, user_id: str, db: Session) -> None:
+async def remove_member(event: Event, user_id: str, db: Session) -> None:
     if user_id == event.owner_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -228,6 +243,10 @@ def remove_member(event: Event, user_id: str, db: Session) -> None:
 
     member.status = MemberStatus.REMOVED
     db.commit()
+    await asyncio.gather(
+        event_list_cache.invalidate(f"managed:{event.owner_id}"),
+        event_list_cache.invalidate(f"attended:{event.owner_id}"),
+    )
 
 
 def add_invites(event: Event, payload: InviteCreate, db: Session) -> list[EventInvite]:
@@ -298,51 +317,56 @@ def get_event_list(owner: User, db: Session) -> list[Event]:
     )
 
 
-def get_managed_events(user: User, db: Session) -> list[Event]:
-    """
-    Return events the user owns or co-organizes.
-    Used for the organizer dashboard view.
-    """
-    memberships = (
-        db.query(EventMember)
-        .filter(
-            EventMember.user_id == user.id,
-            EventMember.role == EventRole.ORGANIZER,
-            EventMember.status == MemberStatus.ACTIVE,
+async def get_managed_events(user: User, db: Session):
+    async def fetch():
+        members = (
+            db.query(EventMember)
+            .filter(
+                EventMember.user_id == user.id,
+                EventMember.role == EventRole.ORGANIZER,
+                EventMember.status == MemberStatus.ACTIVE,
+            )
+            .all()
         )
-        .all()
-    )
-    event_ids = [m.event_id for m in memberships]
-    if not event_ids:
-        return []
-    return (
-        db.query(Event)
-        .filter(Event.id.in_(event_ids), Event.status != EventStatus.DELETED)
-        .order_by(Event.created_at.desc())
-        .all()
-    )
+        ids = [m.event_id for m in members]
+        if not ids:
+            return []
+        events = (
+            db.query(Event)
+            .filter(Event.id.in_(ids), Event.status != EventStatus.DELETED)
+            .order_by(Event.created_at.desc())
+            .all()
+        )
+        return [EventResponse.model_validate(e).model_dump() for e in events]
+
+    return await event_list_cache.get_or_set(f"managed:{user.id}", fetch)
 
 
-def get_attended_events(user: User, db: Session) -> list[Event]:
+async def get_attended_events(user: User, db: Session):
     """
     Return events the user is an attendee of (not organizer).
     Used for the attendee "my events" view.
     """
-    memberships = (
-        db.query(EventMember)
-        .filter(
-            EventMember.user_id == user.id,
-            EventMember.role == EventRole.ATTENDEE,
-            EventMember.status == MemberStatus.ACTIVE,
+
+    async def fetch():
+        members = (
+            db.query(EventMember)
+            .filter(
+                EventMember.user_id == user.id,
+                EventMember.role == EventRole.ATTENDEE,
+                EventMember.status == MemberStatus.ACTIVE,
+            )
+            .all()
         )
-        .all()
-    )
-    event_ids = [m.event_id for m in memberships]
-    if not event_ids:
-        return []
-    return (
-        db.query(Event)
-        .filter(Event.id.in_(event_ids), Event.status != EventStatus.DELETED)
-        .order_by(Event.created_at.desc())
-        .all()
-    )
+        ids = [m.event_id for m in members]
+        if not ids:
+            return []
+        events = (
+            db.query(Event)
+            .filter(Event.id.in_(ids), Event.status != EventStatus.DELETED)
+            .order_by(Event.created_at.desc())
+            .all()
+        )
+        return [EventResponse.model_validate(e).model_dump() for e in events]
+
+    return await event_list_cache.get_or_set(f"attended:{user.id}", fetch)
