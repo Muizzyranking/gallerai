@@ -1,14 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from app.schemas.auth import (
-    PasswordResetConfirm,
-    PasswordResetRequest,
-    TokenResponse,
-    UserCreate,
-    UserLogin,
-)
-from app.services.email_service import email_service
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -23,6 +15,14 @@ from app.core.security import (
 )
 from app.models.tokens import PasswordResetToken, RefreshToken
 from app.models.user import User
+from app.schemas.auth import (
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    TokenResponse,
+    UserCreate,
+    UserLogin,
+)
+from app.services import email_service
 
 logger = logging.getLogger(__name__)
 
