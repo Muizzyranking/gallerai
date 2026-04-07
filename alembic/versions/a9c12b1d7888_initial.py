@@ -1,8 +1,8 @@
-"""initial_schema
+"""Initial
 
-Revision ID: a6180ae58d8c
+Revision ID: a9c12b1d7888
 Revises:
-Create Date: 2026-03-28 19:12:10.922102
+Create Date: 2026-04-07 23:35:58.538993
 
 """
 
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 import pgvector
 
 # revision identifiers, used by Alembic.
-revision: str = "a6180ae58d8c"
+revision: str = "a9c12b1d7888"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -76,6 +76,23 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
+        "password_reset_tokens",
+        sa.Column("user_id", sa.UUID(as_uuid=False), nullable=False),
+        sa.Column("token_hash", sa.String(length=128), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("id", sa.UUID(as_uuid=False), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("token_hash"),
+    )
+    op.create_index(
+        op.f("ix_password_reset_tokens_user_id"),
+        "password_reset_tokens",
+        ["user_id"],
+        unique=False,
+    )
+    op.create_table(
         "platform_settings",
         sa.Column("key", sa.String(length=100), nullable=False),
         sa.Column("value", sa.Text(), nullable=False),
@@ -89,6 +106,20 @@ def upgrade() -> None:
     )
     op.create_index(
         op.f("ix_platform_settings_key"), "platform_settings", ["key"], unique=True
+    )
+    op.create_table(
+        "refresh_tokens",
+        sa.Column("user_id", sa.UUID(as_uuid=False), nullable=False),
+        sa.Column("token_hash", sa.String(length=128), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("id", sa.UUID(as_uuid=False), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("token_hash"),
+    )
+    op.create_index(
+        op.f("ix_refresh_tokens_user_id"), "refresh_tokens", ["user_id"], unique=False
     )
     op.create_table(
         "event_invites",
@@ -145,33 +176,61 @@ def upgrade() -> None:
         op.f("ix_event_members_event_id"), "event_members", ["event_id"], unique=False
     )
     op.create_table(
-        "photos",
+        "media",
         sa.Column("event_id", sa.UUID(as_uuid=False), nullable=False),
         sa.Column("uploaded_by", sa.UUID(as_uuid=False), nullable=True),
         sa.Column("file_hash", sa.String(length=64), nullable=True),
-        sa.Column("storage_key", sa.String(length=255), nullable=False),
         sa.Column("filename", sa.String(length=255), nullable=True),
         sa.Column("file_size", sa.Integer(), nullable=True),
+        sa.Column("mime_type", sa.String(length=50), nullable=False),
+        sa.Column(
+            "media_type", sa.Enum("image", "video", name="mediatype"), nullable=False
+        ),
         sa.Column("width", sa.Integer(), nullable=True),
         sa.Column("height", sa.Integer(), nullable=True),
-        sa.Column("mime_type", sa.String(length=50), nullable=False),
+        sa.Column("storage_key", sa.String(length=255), nullable=False),
+        sa.Column(
+            "storage_backend",
+            sa.Enum("local", "cloudinary", name="storagebackend"),
+            nullable=False,
+            comment="Which backend currently holds the file.",
+        ),
+        sa.Column(
+            "storage_status",
+            sa.Enum(
+                "local", "uploading", "uploaded", "upload_failed", name="storagestatus"
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "extras",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            comment="Backend-specific metadata. Parse with the backend's typed Extras model. ",
+        ),
         sa.Column("face_count", sa.Integer(), nullable=False),
         sa.Column(
             "status",
             sa.Enum(
-                "pending_approval",
-                "rejected",
                 "pending",
+                "pending_approval",
                 "processing",
                 "processed",
                 "failed",
-                name="photostatus",
+                name="mediastatus",
             ),
             nullable=False,
+            comment="Face-detection pipeline status.",
         ),
         sa.Column("is_private", sa.Boolean(), nullable=False),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("processed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "uploaded_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+            comment="Timestamp when cloud promotion completed successfully.",
+        ),
         sa.Column("id", sa.UUID(as_uuid=False), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -181,17 +240,21 @@ def upgrade() -> None:
             ["users.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("event_id", "file_hash", name="uq_photos_event_file_hash"),
+        sa.UniqueConstraint("event_id", "file_hash", name="uq_event_media_filehash"),
         sa.UniqueConstraint("storage_key"),
     )
-    op.create_index(op.f("ix_photos_event_id"), "photos", ["event_id"], unique=False)
-    op.create_index(op.f("ix_photos_file_hash"), "photos", ["file_hash"], unique=False)
-    op.create_index(op.f("ix_photos_status"), "photos", ["status"], unique=False)
+    op.create_index(op.f("ix_media_event_id"), "media", ["event_id"], unique=False)
+    op.create_index(op.f("ix_media_file_hash"), "media", ["file_hash"], unique=False)
+    op.create_index(op.f("ix_media_media_type"), "media", ["media_type"], unique=False)
+    op.create_index(op.f("ix_media_status"), "media", ["status"], unique=False)
+    op.create_index(
+        op.f("ix_media_storage_status"), "media", ["storage_status"], unique=False
+    )
     op.create_table(
         "face_embeddings",
         sa.Column("id", sa.UUID(as_uuid=False), nullable=False),
         sa.Column("event_id", sa.UUID(as_uuid=False), nullable=False),
-        sa.Column("photo_id", sa.UUID(as_uuid=False), nullable=False),
+        sa.Column("media_id", sa.UUID(as_uuid=False), nullable=False),
         sa.Column(
             "embedding", pgvector.sqlalchemy.vector.VECTOR(dim=512), nullable=False
         ),
@@ -201,9 +264,9 @@ def upgrade() -> None:
         sa.Column("model_version", sa.String(length=50), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["photo_id"], ["photos.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["media_id"], ["media.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("photo_id", "face_index", name="uq_face_per_photo"),
+        sa.UniqueConstraint("media_id", "face_index", name="uq_face_per_photo"),
     )
     op.create_index(
         op.f("ix_face_embeddings_event_id"),
@@ -212,16 +275,16 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
-        op.f("ix_face_embeddings_photo_id"),
+        op.f("ix_face_embeddings_media_id"),
         "face_embeddings",
-        ["photo_id"],
+        ["media_id"],
         unique=False,
     )
     op.create_table(
         "user_event_galleries",
         sa.Column("user_id", sa.UUID(as_uuid=False), nullable=False),
         sa.Column("event_id", sa.UUID(as_uuid=False), nullable=False),
-        sa.Column("photo_id", sa.UUID(as_uuid=False), nullable=False),
+        sa.Column("media_id", sa.UUID(as_uuid=False), nullable=False),
         sa.Column("match_score", sa.Float(), nullable=True),
         sa.Column("is_flagged", sa.Boolean(), nullable=False),
         sa.Column(
@@ -235,10 +298,10 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["photo_id"], ["photos.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["media_id"], ["media.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("user_id", "event_id", "photo_id"),
+        sa.UniqueConstraint("user_id", "event_id", "media_id"),
     )
     op.create_index(
         op.f("ix_user_event_galleries_event_id"),
@@ -265,21 +328,29 @@ def downgrade() -> None:
         op.f("ix_user_event_galleries_event_id"), table_name="user_event_galleries"
     )
     op.drop_table("user_event_galleries")
-    op.drop_index(op.f("ix_face_embeddings_photo_id"), table_name="face_embeddings")
+    op.drop_index(op.f("ix_face_embeddings_media_id"), table_name="face_embeddings")
     op.drop_index(op.f("ix_face_embeddings_event_id"), table_name="face_embeddings")
     op.drop_table("face_embeddings")
-    op.drop_index(op.f("ix_photos_status"), table_name="photos")
-    op.drop_index(op.f("ix_photos_file_hash"), table_name="photos")
-    op.drop_index(op.f("ix_photos_event_id"), table_name="photos")
-    op.drop_table("photos")
+    op.drop_index(op.f("ix_media_storage_status"), table_name="media")
+    op.drop_index(op.f("ix_media_status"), table_name="media")
+    op.drop_index(op.f("ix_media_media_type"), table_name="media")
+    op.drop_index(op.f("ix_media_file_hash"), table_name="media")
+    op.drop_index(op.f("ix_media_event_id"), table_name="media")
+    op.drop_table("media")
     op.drop_index(op.f("ix_event_members_event_id"), table_name="event_members")
     op.drop_table("event_members")
     op.drop_index(op.f("ix_event_invites_invite_token"), table_name="event_invites")
     op.drop_index(op.f("ix_event_invites_event_id"), table_name="event_invites")
     op.drop_index(op.f("ix_event_invites_email"), table_name="event_invites")
     op.drop_table("event_invites")
+    op.drop_index(op.f("ix_refresh_tokens_user_id"), table_name="refresh_tokens")
+    op.drop_table("refresh_tokens")
     op.drop_index(op.f("ix_platform_settings_key"), table_name="platform_settings")
     op.drop_table("platform_settings")
+    op.drop_index(
+        op.f("ix_password_reset_tokens_user_id"), table_name="password_reset_tokens"
+    )
+    op.drop_table("password_reset_tokens")
     op.drop_table("events")
     op.drop_index(op.f("ix_users_face_scan_hash"), table_name="users")
     op.drop_index(op.f("ix_users_email"), table_name="users")
