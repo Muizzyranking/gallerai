@@ -17,18 +17,18 @@ def search_event_for_user(
 ) -> dict[str, float]:
     """
     Search faces in event using pgvector cosine similarity.
-    Returns: {photo_id: best_similarity_score}
+    Returns: {media_id: best_similarity_score}
     """
     threshold = threshold or settings.face_similarity_threshold
 
     stmt = text("""
         SELECT 
-            photo_id::text as photo_id,
+            media_id::text as media_id,
             MAX(1 - (embedding <=> :query_vec)) as similarity
         FROM face_embeddings
         WHERE event_id = :event_id
           AND 1 - (embedding <=> :query_vec) > :threshold
-        GROUP BY photo_id
+        GROUP BY media_id
         ORDER BY similarity DESC
         LIMIT :limit
     """)
@@ -43,10 +43,10 @@ def search_event_for_user(
         },
     )
 
-    matches = {row.photo_id: float(row.similarity) for row in result}
+    matches = {row.media_id: float(row.similarity) for row in result}
 
     logger.info(
         f"Search complete — event={event_id} "
-        f"matched_photos={len(matches)} threshold={threshold}"
+        f"matched_media={len(matches)} threshold={threshold}"
     )
     return matches
