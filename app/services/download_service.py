@@ -3,185 +3,105 @@ import logging
 import zipfile
 from collections.abc import AsyncGenerator
 
-from fastapi import HTTPException, status
-from sqlalchemy.orm import Session, joinedload
+import httpx
+from fastapi.responses import StreamingResponse
 
-from app.models.gallery import UserEventGallery
-from app.models.photo import Photo
-from app.models.user import User
-from app.services.storage_service import StorageError, storage
+from app.models.media import Media
+from app.services.storage_service import get_download_url
 
 logger = logging.getLogger(__name__)
 
-ZIP_CHUNK_SIZE = 5
+ZIP_CHUNK_SIZE = 10  # flush zip buffer every N files
+HTTP_CHUNK_BYTES = 256 * 1024  # 256 KB read chunks when fetching remote assets
 
 
-def get_single_photo_for_download(
-    photo_id: str,
-    event_id: str,
-    db: Session,
-) -> tuple[str, str, str]:
-    """
-    Resolve a photo for download.
-    Returns (file_path, filename, mime_type).
-    """
-    photo = (
-        db.query(Photo).filter(Photo.id == photo_id, Photo.event_id == event_id).first()
-    )
-    if not photo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Photo not found",
-        )
-    if photo.is_private:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This photo is private",
-        )
-    try:
-        file_path = storage.load(photo.storage_key)
-    except StorageError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Photo file not found in storage",
-        ) from e
-    filename = photo.filename or f"{photo.id}.jpg"
-    return str(file_path), filename, photo.mime_type
-
-
-def get_gallery_photos_for_download(
-    user: User,
-    event_id: str,
-    db: Session,
-) -> list[Photo]:
-    """
-    Fetch all non-flagged, non-private matched photos for a user's gallery.
-    Used to build the zip download.
-    """
-    entries = (
-        db.query(UserEventGallery)
-        .options(joinedload(UserEventGallery.photo))
-        .filter(
-            UserEventGallery.user_id == user.id,
-            UserEventGallery.event_id == event_id,
-            UserEventGallery.is_flagged == False,  # noqa: E712
-        )
-        .all()
-    )
-    photos = [
-        entry.photo for entry in entries if entry.photo and not entry.photo.is_private
-    ]
-    if not photos:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No photos available for download",
-        )
-    return photos
-
-
-def get_photos_from_id(event_id: str, photo_ids: list[str], db: Session):
-    entries = (
-        db.query(UserEventGallery)
-        .options(joinedload(UserEventGallery.photo))
-        .filter(
-            UserEventGallery.event_id == event_id,
-            UserEventGallery.photo_id.in_(photo_ids),
-            UserEventGallery.is_flagged == False,  # noqa: E712
-        )
-        .all()
-    )
-    photo_map = {
-        entry.photo_id: entry.photo
-        for entry in entries
-        if entry.photo and not entry.photo.is_private
-    }
-
-    photos = [photo_map[pid] for pid in photo_ids if pid in photo_map]
-    if not photos:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No valid photos found for download",
-        )
-
-    missing = len(photo_ids) - len(photos)
-    if missing > 0:
-        logger.warning(
-            f"Skipped {missing} photos (private, flagged, or not in gallery)"
-        )
-
-    return photos
-
-def get_photos_from_id(user: User, event_id: str, photo_ids: list[str], db: Session):
-    entries = (
-        db.query(UserEventGallery)
-        .options(joinedload(UserEventGallery.photo))
-        .filter(
-            UserEventGallery.user_id == user.id,
-            UserEventGallery.event_id == event_id,
-            UserEventGallery.photo_id.in_(photo_ids),
-            UserEventGallery.is_flagged == False,  # noqa: E712
-        )
-        .all()
-    )
-    photo_map = {
-        entry.photo_id: entry.photo
-        for entry in entries
-        if entry.photo and not entry.photo.is_private
-    }
-
-    photos = [photo_map[pid] for pid in photo_ids if pid in photo_map]
-    if not photos:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No valid photos found for download",
-        )
-
-    missing = len(photo_ids) - len(photos)
-    if missing > 0:
-        logger.warning(
-            f"Skipped {missing} photos (private, flagged, or not in gallery)"
-        )
-
-    return photos
+async def _fetch_chunks(
+    url: str, client: httpx.AsyncClient
+) -> AsyncGenerator[bytes, None]:
+    """Stream an asset from ``url`` in fixed-size chunks."""
+    async with client.stream("GET", url, follow_redirects=True) as response:
+        response.raise_for_status()
+        async for chunk in response.aiter_bytes(chunk_size=HTTP_CHUNK_BYTES):
+            yield chunk
 
 
 async def stream_zip(
-    photos: list[Photo],
-    zip_filename: str = "galleria-photos.zip",
+    media_items: list[Media],
+    zip_filename: str = "galleria.zip",
 ) -> AsyncGenerator[bytes, None]:
     """
-    Stream a zip file containing all given photos.
-    Writes photos in chunks to keep memory usage flat.
-    Yields bytes chunks suitable for FastAPI StreamingResponse.
+    Stream a zip containing all given media assets.
 
-    Each photo is stored in the zip under its original filename,
-    with a numeric prefix to avoid name collisions:
-        001_photo.jpg
-        002_photo.jpg
+    Each asset is fetched via its download URL regardless of which storage
+    backend it lives on — local assets hit the local download endpoint,
+    cloud assets hit the CDN. The zip is written in streaming mode so
+    memory usage stays flat regardless of asset count or size.
+
+    Yields bytes chunks suitable for FastAPI ``StreamingResponse``.
+    Files are named:  001_original_filename.jpg
+                      002_original_filename.mp4
     """
     buffer = io.BytesIO()
 
-    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for i, photo in enumerate(photos, start=1):
-            try:
-                file_path = storage.load(photo.storage_key)
-            except StorageError:
-                logger.warning(f"Skipping photo {photo.id} — file not found in storage")
-                continue
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for i, media in enumerate(media_items, start=1):
+                url = get_download_url(media)
+                original_name = media.filename or f"{media.id}"
+                zip_entry_name = f"{i:03d}_{original_name}"
 
-            original_name = photo.filename or f"{photo.id}.jpg"
-            zip_entry_name = f"{i:03d}_{original_name}"
+                try:
+                    # ZipFile.open() in write mode lets us stream directly into
+                    # the entry without buffering the whole file in memory.
+                    with zf.open(zip_entry_name, "w", force_zip64=True) as entry:
+                        async for chunk in _fetch_chunks(url, client):
+                            entry.write(chunk)
 
-            zf.write(str(file_path), zip_entry_name)
-            logger.debug(f"Added {zip_entry_name} to zip")
+                    logger.debug("stream_zip: added %s", zip_entry_name)
 
-            if i % ZIP_CHUNK_SIZE == 0:
-                yield buffer.getvalue()
-                buffer.seek(0)
-                buffer.truncate(0)
+                except Exception as exc:
+                    # Skip unreadable assets — log and continue so the rest
+                    # of the zip is still delivered.
+                    logger.warning(
+                        "stream_zip: skipping %s (%s) — %s",
+                        zip_entry_name,
+                        media.id,
+                        exc,
+                    )
+                    continue
+
+                # Flush the buffer every ZIP_CHUNK_SIZE files to avoid
+                # accumulating too much in memory at once.
+                if i % ZIP_CHUNK_SIZE == 0:
+                    yield buffer.getvalue()
+                    buffer.seek(0)
+                    buffer.truncate(0)
 
     remaining = buffer.getvalue()
     if remaining:
         yield remaining
 
-    logger.info(f"Zip stream complete — {len(photos)} photos — {zip_filename}")
+    logger.info("stream_zip: complete — %d assets — %s", len(media_items), zip_filename)
+
+
+def zip_streaming_response(
+    media_items: list[Media],
+    zip_filename: str = "galleria.zip",
+) -> StreamingResponse:
+    """
+    Wrap ``stream_zip`` in a ``StreamingResponse`` ready to return from a route.
+
+    Usage::
+
+        @router.get("/events/{event_id}/download")
+        async def download_event_media(event: AccessibleEvent, db: DB):
+            media = media_service.get_event_media(event.id, db)
+            return zip_streaming_response(media, f"event-{event.id}.zip")
+    """
+    return StreamingResponse(
+        stream_zip(media_items, zip_filename),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_filename}"',
+        },
+    )
