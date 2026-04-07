@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     anonymous_scan_ttl_seconds: int = 7200  # 2 hours
 
     default_cache_ttl: int = 300  # 5 min
+    refresh_token_expire_days: int = 7
 
 
 @lru_cache

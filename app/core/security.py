@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -18,7 +20,7 @@ def verify_hash(plain_value: str | None, hashed_value: str | None) -> bool:
     return pwd_hash.verify(plain_value, hashed_value)
 
 
-def create_access_token(data: dict, expires_delta: timedelta | None) -> str:
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
@@ -26,7 +28,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None) -> str:
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=settings.access_token_expire_minutes
         )
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
 
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
@@ -46,4 +48,27 @@ def decode_access_token(token: str) -> dict:
 
 
 def decode_access_token_for_user(token: str) -> str | None:
-    return decode_access_token(token).get("sub")
+    payload = decode_access_token(token)
+    if payload.get("type") != "access":
+        return None
+    return payload.get("sub")
+
+
+def verify_access_token(token: str) -> str | None:
+    return decode_access_token_for_user(token)
+
+
+def create_refresh_token() -> str:
+    return secrets.token_urlsafe(64)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def verify_token_hash(token: str, hashed: str) -> bool:
+    return hash_token(token) == hashed
+
+
+def create_password_reset_token() -> str:
+    return secrets.token_urlsafe(64)

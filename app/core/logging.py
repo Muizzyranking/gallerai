@@ -77,18 +77,15 @@ def setup_logging(env: str = "development", log_dir: str = "logs") -> None:
     level = logging.DEBUG if is_dev else logging.INFO
     formatter = DevFormatter() if is_dev else ProdFormatter()
 
-    # ── Root logger ───────────────────────────────────────────────────────────
     root = logging.getLogger()
     root.setLevel(level)
     root.handlers.clear()
 
-    # ── Terminal handler (always on) ──────────────────────────────────────────
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setLevel(level)
     stream_handler.setFormatter(formatter)
     root.addHandler(stream_handler)
 
-    # ── Rotating file handler (production only) ───────────────────────────────
     if not is_dev:
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
@@ -103,7 +100,6 @@ def setup_logging(env: str = "development", log_dir: str = "logs") -> None:
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
 
-    # ── Silence noisy third-party loggers ─────────────────────────────────────
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("multipart").setLevel(logging.WARNING)
     logging.getLogger("PIL").setLevel(logging.WARNING)
