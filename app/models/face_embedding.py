@@ -18,13 +18,13 @@ from app.db.postgres import BaseModel, generate_uuid
 
 if TYPE_CHECKING:
     from app.models.event import Event
-    from app.models.photo import Photo
+    from app.models.media import Media
 
 
 class FaceEmbedding(BaseModel):
     __tablename__ = "face_embeddings"
     __table_args__ = (
-        UniqueConstraint("photo_id", "face_index", name="uq_face_per_photo"),
+        UniqueConstraint("media_id", "face_index", name="uq_face_per_photo"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -36,9 +36,9 @@ class FaceEmbedding(BaseModel):
         nullable=False,
         index=True,
     )
-    photo_id: Mapped[str] = mapped_column(
+    media_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("photos.id", ondelete="CASCADE"),
+        ForeignKey("media.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -52,5 +52,5 @@ class FaceEmbedding(BaseModel):
     )
 
     # Relationships
-    photo: Mapped["Photo"] = relationship("Photo", back_populates="faces")
+    media: Mapped["Media"] = relationship("Media", back_populates="faces")
     event: Mapped["Event"] = relationship("Event", back_populates="face_embeddings")

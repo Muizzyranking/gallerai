@@ -17,13 +17,13 @@ from app.db import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.event import Event
-    from app.models.photo import Photo
+    from app.models.media import Media
     from app.models.user import User
 
 
 class UserEventGallery(BaseModel, TimestampMixin):
     __tablename__ = "user_event_galleries"
-    __table_args__ = (UniqueConstraint("user_id", "event_id", "photo_id"),)
+    __table_args__ = (UniqueConstraint("user_id", "event_id", "media_id"),)
 
     user_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -37,8 +37,8 @@ class UserEventGallery(BaseModel, TimestampMixin):
         nullable=False,
         index=True,
     )
-    photo_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("photos.id", ondelete="CASCADE"), nullable=False
+    media_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("media.id", ondelete="CASCADE"), nullable=False
     )
     match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_flagged: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -52,4 +52,4 @@ class UserEventGallery(BaseModel, TimestampMixin):
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="gallery_entries")
     event: Mapped["Event"] = relationship("Event")
-    photo: Mapped["Photo"] = relationship("Photo", back_populates="gallery_entries")
+    media: Mapped["Media"] = relationship("Media", back_populates="gallery_entries")

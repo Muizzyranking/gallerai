@@ -1,6 +1,6 @@
 from app.models.user import User  # noqa: I001
 from app.models.event import Event, EventMember, EventInvite
-from app.models.photo import Photo
+from app.models.media import Media
 from app.models.gallery import UserEventGallery
 from app.models.face_embedding import FaceEmbedding
 from app.models.platform import PlatformSettings
@@ -11,7 +11,7 @@ __all__ = [
     "Event",
     "EventMember",
     "EventInvite",
-    "Photo",
+    "Media",
     "UserEventGallery",
     "FaceEmbedding",
     "PlatformSettings",

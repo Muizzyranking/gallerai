@@ -24,7 +24,7 @@ from app.db import BaseModel, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.face_embedding import FaceEmbedding
-    from app.models.photo import Photo
+    from app.models.media import Media
     from app.models.user import User
 
 
@@ -74,7 +74,7 @@ class Event(BaseModel, TimestampMixin):
     owner: Mapped["User"] = relationship(
         "User", back_populates="owned_events", foreign_keys=[owner_id]
     )
-    photos: Mapped[list["Photo"]] = relationship("Photo", back_populates="event")
+    media: Mapped[list["Media"]] = relationship("Media", back_populates="event")
     members: Mapped[list["EventMember"]] = relationship(
         "EventMember", back_populates="event"
     )
