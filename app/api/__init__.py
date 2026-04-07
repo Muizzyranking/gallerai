@@ -1,14 +1,14 @@
 from fastapi import APIRouter
 
-from . import auth, downloads, event, faces, gallery, photos
+from . import auth, downloads, event, faces, gallery, media
 
 router = APIRouter()
 
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(event.router, prefix="/events", tags=["events"])
 router.include_router(
-    photos.router,
-    prefix="/events/{event_id}/photos",
+    media.router,
+    prefix="/events/{event_id}/media",
     tags=["photos"],
 )
 router.include_router(
