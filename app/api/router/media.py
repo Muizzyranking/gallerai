@@ -13,6 +13,7 @@ from app.core.enums import MediaStatus, StorageBackend
 from app.core.schemas import ApiResponse
 from app.schemas.media import (
     AnonymousGalleryDownloadRequest,
+    BulkDownloadRequest,
     MediaBulkUploadResponse,
     MediaCardOrganiser,
     MediaDetail,
@@ -437,3 +438,56 @@ async def download_anonymous_gallery(
             detail="Scan token expired or no matches found",
         )
     return zip_streaming_response(items, zip_filename=f"my-photos-{event.id}.zip")
+
+
+@router.post(
+    "/download/select",
+    summary="Download a specific selection of media as zip",
+)
+async def download_selected_media(
+    event: AccessibleEvent,
+    payload: BulkDownloadRequest,
+    db: DB,
+) -> StreamingResponse:
+    """
+    Download a caller-selected subset of media as a zip.
+    Maximum {MAX_SELECT_DOWNLOAD} items per request — excess IDs are
+    ignored with a note in the response headers.
+    """
+    from app.models.media import Media as MediaModel
+
+    MAX_SELECT_DOWNLOAD = 100
+
+    # Deduplicate and cap
+    requested_ids = list(dict.fromkeys(payload.media_ids))
+    truncated = len(requested_ids) > MAX_SELECT_DOWNLOAD
+    requested_ids = requested_ids[:MAX_SELECT_DOWNLOAD]
+
+    items = (
+        db.query(MediaModel)
+        .filter(
+            MediaModel.id.in_(requested_ids),
+            MediaModel.event_id == event.id,
+            MediaModel.status == MediaStatus.PROCESSED,
+            MediaModel.is_private == False,  # noqa: E712
+        )
+        .all()
+    )
+
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="None of the requested media items are available for download",
+        )
+
+    # Preserve caller's requested order
+    id_order = {mid: i for i, mid in enumerate(requested_ids)}
+    items.sort(key=lambda m: id_order.get(m.id, 999))
+
+    response = zip_streaming_response(items, zip_filename=f"selection-{event.id}.zip")
+
+    if truncated:
+        response.headers["X-Truncated"] = "true"
+        response.headers["X-Max-Items"] = str(MAX_SELECT_DOWNLOAD)
+
+    return response

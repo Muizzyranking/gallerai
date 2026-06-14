@@ -2,7 +2,8 @@ from fastapi import APIRouter
 
 from app.api.dependencies import DB, CurrentUser
 from app.core.schemas import ApiResponse
-from app.schemas.user import TokenResponse, UserCreate, UserLogin, UserResponse
+from app.schemas.auth import TokenResponse
+from app.schemas.user import UserCreate, UserLogin, UserResponse
 from app.services.auth_service import login_user, register_user
 
 router = APIRouter()
@@ -16,7 +17,7 @@ def register(payload: UserCreate, db: DB):
 
 @router.post("/login", response_model=ApiResponse[TokenResponse])
 def login(payload: UserLogin, db: DB):
-    data = login_user(payload.email, payload.password, db)
+    data = login_user(payload, db)
     return ApiResponse[TokenResponse](message="Login successful", data=data)
 
 

@@ -4,15 +4,14 @@ from fastapi import APIRouter, Query
 
 from app.api.dependencies import DB, AccessibleEvent, CurrentUser
 from app.core.schemas import ApiResponse
-from app.models.photo import Photo
+from app.models.media import Media
 from app.schemas.gallery import (
     AnonymousGalleryResponse,
     FlagPhotoRequest,
     GalleryResponse,
 )
 from app.schemas.photo import PhotoResponse, PhotoSchema
-from app.services import gallery_service
-from app.services.photo_service import get_event_photos
+from app.services import gallery_service, media_service
 
 router = APIRouter()
 
@@ -22,7 +21,7 @@ router = APIRouter()
     response_model=ApiResponse[PhotoResponse],
     summary="Full event gallery — all non-private photos",
 )
-def get_full_gallery(
+async def get_full_gallery(
     event: AccessibleEvent,
     db: DB,
     page: Annotated[int, Query(ge=1)] = 1,
@@ -32,10 +31,9 @@ def get_full_gallery(
     Return all non-private photos for an event.
     Requires valid event access. Paginated.
     """
-    photos = get_event_photos(event.id, db, page, page_size)
-    return ApiResponse(
+    return ApiResponse[PhotoResponse](
         message="Gallery retrieved successfully",
-        data=photos,
+        data=await media_service.list_event_media_public(event.id, db, page, page_size),
     )
 
 
@@ -44,7 +42,7 @@ def get_full_gallery(
     response_model=ApiResponse[GalleryResponse],
     summary="Personal face-matched gallery for registered user",
 )
-def get_my_gallery(
+async def get_my_gallery(
     event: AccessibleEvent,
     current_user: CurrentUser,
     db: DB,
@@ -59,7 +57,7 @@ def get_my_gallery(
     Excludes flagged entries by default.
     Requires the user to have previously scanned their face for this event.
     """
-    gallery = gallery_service.get_user_gallery(
+    gallery = await gallery_service.get_user_gallery(
         user=current_user,
         event_id=event.id,
         db=db,
@@ -68,7 +66,7 @@ def get_my_gallery(
         include_flagged=include_flagged,
     )
     return ApiResponse(
-        message=f"{gallery.total} matched photos found",
+        message=f"{gallery.get('total', 0)} matched photos found",
         data=gallery,
     )
 
@@ -98,11 +96,11 @@ async def get_anonymous_gallery(
     paginated_ids = photo_ids[(page - 1) * page_size : page * page_size]
 
     # Fetch photo records
-    photos = (
-        db.query(Photo)
+    media = (
+        db.query(Media)
         .filter(
-            Photo.id.in_(paginated_ids),
-            Photo.is_private == False,  # noqa: E712
+            Media.id.in_(paginated_ids),
+            Media.is_private == False,  # noqa: E712
         )
         .all()
     )
@@ -112,7 +110,7 @@ async def get_anonymous_gallery(
         data=AnonymousGalleryResponse(
             event_id=event.id,
             total=total,
-            photos=[PhotoSchema.model_validate(p) for p in photos],
+            photos=[PhotoSchema.model_validate(p) for p in media],
         ),
     )
 
@@ -122,7 +120,7 @@ async def get_anonymous_gallery(
     response_model=ApiResponse[dict],
     summary="Flag a photo in personal gallery",
 )
-def flag_photo(
+async def flag_photo(
     photo_id: str,
     payload: FlagPhotoRequest,
     event: AccessibleEvent,
@@ -134,7 +132,7 @@ def flag_photo(
     Flagged photos are hidden from normal gallery view but never deleted.
     Reasons: not_me (false match), dislike (personal preference), removed (no reason).
     """
-    gallery_service.flag_gallery_entry(
+    await gallery_service.flag_gallery_entry(
         user=current_user,
         event_id=event.id,
         photo_id=photo_id,
@@ -151,14 +149,14 @@ def flag_photo(
     response_model=ApiResponse[dict],
     summary="Restore a flagged photo to gallery",
 )
-def unflag_photo(
+async def unflag_photo(
     photo_id: str,
     event: AccessibleEvent,
     current_user: CurrentUser,
     db: DB,
 ):
     """Restore a previously flagged photo back to the user's visible gallery."""
-    gallery_service.unflag_gallery_entry(
+    await gallery_service.unflag_gallery_entry(
         user=current_user,
         event_id=event.id,
         photo_id=photo_id,

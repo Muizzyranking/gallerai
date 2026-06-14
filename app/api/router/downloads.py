@@ -82,7 +82,7 @@ async def download_my_gallery(
     Memory usage stays flat regardless of gallery size — photos are
     streamed into the zip in chunks.
     """
-    photos = download_service.get_gallery_photos_for_download(
+    photos = download_service.get_user_gallery_photos(
         user=current_user,
         event_id=event.id,
         db=db,
