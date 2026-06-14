@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -23,8 +23,8 @@ DB = Annotated[Session, Depends(get_db)]
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
 
 
-def get_current_user(credentials: Credentials, db: DB) -> User:
-    """Require a valid JWT. Raises 401 if missing or invalid."""
+def get_current_user(request: Request, credentials: Credentials, db: DB) -> User:
+    """Require a valid JWT."""
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -45,20 +45,22 @@ def get_current_user(credentials: Credentials, db: DB) -> User:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
+    request.state.user_id = str(user.id)
     return user
 
 
-def get_current_user_optional(credentials: Credentials, db: DB) -> User | None:
-    """
-    Try to resolve a user from JWT but return None if not authenticated.
-    Used for endpoints that support both registered and anonymous access.
-    """
+def get_current_user_optional(
+    request: Request, credentials: Credentials, db: DB
+) -> User | None:
     if not credentials:
         return None
     user_id = decode_access_token_for_user(credentials.credentials)
     if not user_id:
         return None
-    return db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        request.state.user_id = str(user.id)
+    return user
 
 
 def get_event_or_404(event_id: str, db: DB) -> Event:
@@ -213,11 +215,6 @@ async def get_event_access(
 
 
 def require_admin(current_user: Annotated[User, Depends(get_current_user)]) -> User:
-    """
-    Require the current user to be an admin.
-    Raises 403 if the user does not have is_admin=True.
-    Also checks is_active — deactivated admins lose access.
-    """
     if not current_user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
