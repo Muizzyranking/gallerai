@@ -5,7 +5,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, Literal, TypeAlias
+from typing import Any, Final, Literal, Self
 
 import aiosmtplib
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound, select_autoescape
@@ -48,7 +48,7 @@ class EmailMessage:
     bcc: list[str] = field(default_factory=list)
 
 
-SendDirection: TypeAlias = Literal["outbound", "transactional", "internal"]  # noqa: UP040
+type SendDirection = Literal["outbound", "transactional", "internal"]
 
 _STRIP_TAGS_RE: Final[re.Pattern[str]] = re.compile(r"<[^>]+>")
 _COLLAPSE_NEWLINES_RE: Final[re.Pattern[str]] = re.compile(r"\n\s*\n")
@@ -59,13 +59,23 @@ class EmailService:
     Async email service with Jinja2 templates and multipart MIME support.
     """
 
-    def __init__(self, template_dir: str | Path = "app/templates/emails") -> None:
+    def __init__(
+        self,
+        *,
+        smtp_host: str,
+        smtp_port: int,
+        smtp_user: str,
+        smtp_password: str,
+        from_email: str,
+        use_tls: bool = True,
+        template_dir: str | Path = "app/templates/emails",
+    ) -> None:
         self._smtp_host: str = settings.smtp_host
         self._smtp_port: int = settings.smtp_port
         self._smtp_user: str = settings.smtp_user
         self._smtp_password: str = settings.smtp_password
         self._use_tls: bool = settings.smtp_use_tls
-        self._from_email: str = settings.from_email
+        self._from_email: str = settings.smtp_from_email
         self._template_dir: Path = Path(template_dir)
 
         self._jinja_env: Environment = Environment(
@@ -75,25 +85,35 @@ class EmailService:
             lstrip_blocks=True,
         )
 
+    @classmethod
+    def from_settings(cls) -> Self:
+        """Factory using your global settings to keep call sites clean."""
+        from app.core.config import settings
+
+        return cls(
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_user=settings.smtp_user,
+            smtp_password=settings.smtp_password,
+            from_email=settings.smtp_from_email,
+            use_tls=settings.smtp_use_tls,
+        )
+
     def _render_template(
         self,
         template_type: EmailTemplate | str,
         context: dict[str, Any],
+        subject: str = "GallerAI Notification",
     ) -> RenderedEmail:
         """
         Render HTML + optional plain-text templates.
         Falls back to stripping HTML tags when ``body.txt`` is absent.
         """
-        html_template = self._jinja_env.get_template(
-            f"emails/{template_type}/body.html"
-        )
+        html_template = self._jinja_env.get_template(f"{template_type}/body.html")
         html_content = html_template.render(**context)
-        subject: str = context.get("subject", "GallerAI Notification")
 
         try:
-            text_template = self._jinja_env.get_template(
-                f"emails/{template_type}/body.txt"
-            )
+            text_template = self._jinja_env.get_template(f"{template_type}/body.txt")
             text_content = text_template.render(**context)
         except TemplateNotFound:
             stripped = _STRIP_TAGS_RE.sub("", html_content)
@@ -113,6 +133,8 @@ class EmailService:
             msg["Reply-To"] = message.reply_to
         if message.cc:
             msg["Cc"] = ", ".join(message.cc)
+        if message.bcc:
+            msg["Bcc"] = ", ".join(message.bcc)
 
         msg.attach(MIMEText(message.text_content, "plain", "utf-8"))
         msg.attach(MIMEText(message.html_content, "html", "utf-8"))
@@ -124,6 +146,7 @@ class EmailService:
         template_type: EmailTemplate | str,
         context: dict[str, Any],
         *,
+        subject: str = "GallerAI Notification",
         reply_to: str | None = None,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
@@ -131,7 +154,7 @@ class EmailService:
     ) -> bool:
         """Render a template and deliver the email via SMTP."""
         try:
-            rendered = self._render_template(template_type, context)
+            rendered = self._render_template(template_type, context, subject)
 
             message = EmailMessage(
                 to=to,
@@ -178,33 +201,33 @@ class EmailService:
             )
             return False
 
-    @classmethod
     async def send_welcome(
-        cls, to: str, display_name: str | None, login_url: str
+        self, to: str, display_name: str | None, login_url: str
     ) -> bool:
         """Send a welcome email to a newly registered user."""
-        return await cls.send(
+        return await self.send(
             to=to,
             template_type=EmailTemplate.WELCOME,
             context={"display_name": display_name, "login_url": login_url},
+            subject="Welcome to GallerAI",
         )
 
-    @classmethod
     async def send_password_reset(
-        cls, to: str, reset_url: str, expires_in_minutes: int = 30
+        self, to: str, reset_url: str, expires_in_minutes: int = 30
     ) -> bool:
         """Send a password-reset link."""
-        return await cls.send(
+        return await self.send(
             to=to,
             template_type=EmailTemplate.PASSWORD_RESET,
             context={"reset_url": reset_url, "expires_in_minutes": expires_in_minutes},
+            subject="Reset your password",
         )
 
-    @classmethod
-    async def send_email_verification(cls, to: str, verify_url: str) -> bool:
+    async def send_email_verification(self, to: str, verify_url: str) -> bool:
         """Send an email-address verification link."""
-        return await cls.send(
+        return await self.send(
             to=to,
             template_type=EmailTemplate.EMAIL_VERIFICATION,
             context={"verify_url": verify_url},
+            subject="Verify your email address",
         )
