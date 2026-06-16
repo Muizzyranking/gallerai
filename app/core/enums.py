@@ -1,36 +1,36 @@
-import enum
+from enum import StrEnum
 
 
-class EventStatus(str, enum.Enum):
+class EventStatus(StrEnum):
     ACTIVE = "active"
     ARCHIVED = "archived"
     DELETED = "deleted"
 
 
-class AccessMode(str, enum.Enum):
+class AccessMode(StrEnum):
     LINK = "link"
     CODE = "code"
     APPROVED_LIST = "approved_list"
     COMBINED = "combined"
 
 
-class EventRole(str, enum.Enum):
+class EventRole(StrEnum):
     ORGANIZER = "organizer"
     ATTENDEE = "attendee"
 
 
-class MemberStatus(str, enum.Enum):
+class MemberStatus(StrEnum):
     ACTIVE = "active"
     REMOVED = "removed"
 
 
-class InviteStatus(str, enum.Enum):
+class InviteStatus(StrEnum):
     PENDING = "pending"
     ACCEPTED = "accepted"
     REVOKED = "revoked"
 
 
-class PhotoStatus(str, enum.Enum):
+class PhotoStatus(StrEnum):
     """
     pending_approval: attendee upload awaiting organizer approval
     rejected: organizer rejected the upload — soft kept for audit
@@ -48,7 +48,7 @@ class PhotoStatus(str, enum.Enum):
     FAILED = "failed"
 
 
-class FlagReason(str, enum.Enum):
+class FlagReason(StrEnum):
     """
     Reason a user flagged a photo in their gallery.
     not_me: face recognition false positive
@@ -59,3 +59,36 @@ class FlagReason(str, enum.Enum):
     NOT_ME = "not_me"
     DISLIKE = "dislike"
     REMOVED = "removed"
+
+
+class MediaStatus(StrEnum):
+    """Tracks the face-detection / processing pipeline for an image."""
+
+    PENDING = "pending"
+    PENDING_APPROVAL = "pending_approval"
+    PROCESSING = "processing"
+    PROCESSED = "processed"
+    FAILED = "failed"
+
+
+class StorageStatus(StrEnum):
+    """Tracks the cloud-promotion pipeline independently of face detection."""
+
+    LOCAL = "local"
+    UPLOADING = "uploading"
+    UPLOADED = "uploaded"
+    UPLOAD_FAILED = "upload_failed"
+
+
+class StorageBackend(StrEnum):
+    """Which storage backend currently holds the file."""
+
+    LOCAL = "local"
+    CLOUDINARY = "cloudinary"
+
+
+class MediaType(StrEnum):
+    """Broad media category — determines which processing pipeline runs."""
+
+    IMAGE = "image"
+    VIDEO = "video"
