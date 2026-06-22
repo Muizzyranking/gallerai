@@ -3,15 +3,20 @@ name = "gallerai"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiofiles>=25.1.0",
+    "aiosmtplib>=5.1.0",
     "alembic>=1.18.4",
+    "authlib>=1.7.0",
     "celery>=5.6.2",
+    "cloudinary>=1.44.1",
     "deepface>=0.0.99",
     "fastapi>=0.135.1",
-    "motor>=3.7.1",
+    "fastlimit",
+    "httpx>=0.28.1",
     "numpy>=2.4.3",
+    "pgvector>=0.4.2",
     "pillow>=12.1.1",
     "psycopg2-binary>=2.9.11",
     "pwdlib[argon2]>=0.3.0",
@@ -20,7 +25,7 @@ dependencies = [
     "pyjwt>=2.12.0",
     "python-decouple>=3.8",
     "python-multipart>=0.0.22",
-    "redis[asyncio]>=7.3.0",
+    "redis>=7.3.0",
     "sqlalchemy>=2.0.48",
     "tf-keras>=2.20.1",
     "uvicorn[standard]>=0.41.0",
@@ -32,7 +37,7 @@ line-length = 88
 [tool.ruff.lint]
 select = [ "E", "F", "I", "B", "UP" ]
 
-ignore = [ "E501", "UP017", "B008" ]
+ignore = [ "E501", "UP017", "B008", "UP042" ]
 
 [tool.ruff.format]
 quote-style = "double"
