@@ -22,7 +22,7 @@ class EmailTemplate(StrEnum):
 
     WELCOME = "welcome"
     PASSWORD_RESET = "password_reset"
-    EMAIL_VERIFICATION = "email_verification"
+    VERIFY_EMAIL = "verify_email"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +79,7 @@ class EmailService:
         self._template_dir: Path = Path(template_dir)
 
         self._jinja_env: Environment = Environment(
-            loader=FileSystemLoader(self._template_dir.parent.parent),
+            loader=FileSystemLoader(self._template_dir),
             autoescape=select_autoescape(["html", "xml"]),
             trim_blocks=True,
             lstrip_blocks=True,
@@ -227,7 +227,7 @@ class EmailService:
         """Send an email-address verification link."""
         return await self.send(
             to=to,
-            template_type=EmailTemplate.EMAIL_VERIFICATION,
+            template_type=EmailTemplate.VERIFY_EMAIL,
             context={"verify_url": verify_url},
             subject="Verify your email address",
         )
