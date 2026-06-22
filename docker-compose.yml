@@ -9,12 +9,9 @@ services:
       - .env
     environment:
       - POSTGRES_HOST=postgres
-      - MONGO_HOST=mongo
       - REDIS_HOST=redis
     depends_on:
       postgres:
-        condition: service_healthy
-      mongo:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -24,20 +21,18 @@ services:
     build: .
     volumes:
       - ./storage:/app/storage
-      - deepface_weights:/root/.deepface  
+      - deepface_weights:/root/.deepface
     env_file:
       - .env
     depends_on:
       postgres:
-        condition: service_healthy
-      mongo:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: celery -A galleria.workers.celery_app worker --loglevel=info --concurrency=2
 
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     ports:
       - "5432:5432"
     env_file:
@@ -46,18 +41,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gallerai"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  mongo:
-    image: mongo:7
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -74,8 +57,14 @@ services:
       timeout: 5s
       retries: 5
 
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    restart: unless-stopped
+
 volumes:
   postgres_data:
-  mongo_data:
   redis_data:
-  deepface_weights: 
+  deepface_weights:
