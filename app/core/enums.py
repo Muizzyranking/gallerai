@@ -92,3 +92,8 @@ class MediaType(StrEnum):
 
     IMAGE = "image"
     VIDEO = "video"
+
+
+class AuthProvider(StrEnum):
+    LOCAL = "local"
+    GOOGLE = "google"
