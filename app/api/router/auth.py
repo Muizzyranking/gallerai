@@ -1,13 +1,27 @@
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Query, Request, status
 from fastlimit import rate_limit
 
 from app.api.dependencies import DB, CurrentUser
 from app.core.schemas import ApiResponse
-from app.schemas.auth import LogoutUser, TokenResponse, UserCreate, UserLogin
-from app.schemas.user import UserResponse
-from app.services.auth import auth_service
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    DeleteAccountRequest,
+    EmailConfirmRequest,
+    ForgotPasswordRequest,
+    GoogleAuthUrlResponse,
+    LogoutUser,
+    RefreshTokenRequest,
+    ResendConfirmationRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserCreate,
+    UserLogin,
+    UserResponse,
+    UserUpdate,
+)
+from app.services.auth import auth_service, google_oauth
 
 router = APIRouter()
 
@@ -36,6 +50,16 @@ def email_confirmation(token: Annotated[str, Query()], db: DB):
 
 
 @router.post(
+    "/verify-email",
+    response_model=ApiResponse[None],
+    status_code=status.HTTP_200_OK,
+)
+def verify_email(payload: EmailConfirmRequest, db: DB):
+    auth_service.confirm_email(payload.token, db)
+    return ApiResponse[None](message="Email confirmed successfully")
+
+
+@router.post(
     "/resend_email_confirmation", response_model=ApiResponse[None], status_code=201
 )
 def resend_email_confirmation(
@@ -45,16 +69,63 @@ def resend_email_confirmation(
     return ApiResponse[None](message="Confirmation email resent successfully")
 
 
+@router.post(
+    "/resend-email-verification",
+    response_model=ApiResponse[None],
+    status_code=status.HTTP_201_CREATED,
+)
+def resend_email_verification(
+    payload: ResendConfirmationRequest, db: DB, bg_task: BackgroundTasks
+):
+    auth_service.resend_confirmation(payload.email, db, bg_task)
+    return ApiResponse[None](message="Confirmation email resent successfully")
+
+
 @router.post("/login", response_model=ApiResponse[TokenResponse])
 def login(request: Request, payload: UserLogin, db: DB):
     data = auth_service.login_user(payload, db, request)
     return ApiResponse[TokenResponse](message="Login successful", data=data)
 
 
+@router.post("/refresh", response_model=ApiResponse[TokenResponse])
+def refresh_token(request: Request, payload: RefreshTokenRequest, db: DB):
+    data = auth_service.refresh_access_token(db, payload.refresh_token, request)
+    return ApiResponse[TokenResponse](message="Token refreshed successfully", data=data)
+
+
 @router.post("/logout", response_model=ApiResponse[None])
 def logout(current_user: CurrentUser, db: DB, payload: LogoutUser):
-    auth_service.logout_user(db, current_user, payload.refresh_token)
+    auth_service.logout_user(
+        db,
+        current_user,
+        payload.refresh_token,
+        all_sessions=payload.all_sessions,
+    )
     return ApiResponse[None](message="Logout successful")
+
+
+@router.post("/forgot-password", response_model=ApiResponse[None])
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    db: DB,
+    bg_task: BackgroundTasks,
+):
+    auth_service.forgot_password(payload, db, bg_task)
+    return ApiResponse[None](
+        message="If the email exists, a password reset link has been sent"
+    )
+
+
+@router.post("/reset-password", response_model=ApiResponse[None])
+def reset_password(payload: ResetPasswordRequest, db: DB):
+    auth_service.reset_password(payload, db)
+    return ApiResponse[None](message="Password reset successfully")
+
+
+@router.post("/change-password", response_model=ApiResponse[None])
+def change_password(payload: ChangePasswordRequest, current_user: CurrentUser, db: DB):
+    auth_service.change_password(payload, current_user, db)
+    return ApiResponse[None](message="Password changed successfully")
 
 
 @router.get("/me", response_model=ApiResponse[UserResponse])
@@ -65,12 +136,33 @@ def me(current_user: CurrentUser):
     )
 
 
-@router.get("/me", response_model=ApiResponse[UserResponse])
-def update_me(current_user: CurrentUser):
+@router.patch("/me", response_model=ApiResponse[UserResponse])
+def update_me(
+    payload: UserUpdate,
+    current_user: CurrentUser,
+    db: DB,
+    bg_task: BackgroundTasks,
+):
+    data = auth_service.update_me(payload, current_user, db, bg_task)
     return ApiResponse[UserResponse](
-        message="Current user retrieved successfully",
-        data=UserResponse.model_validate(current_user),
+        message="Account updated successfully",
+        data=data,
     )
+
+
+@router.delete("/me", response_model=ApiResponse[None])
+def delete_account(
+    payload: DeleteAccountRequest,
+    current_user: CurrentUser,
+    db: DB,
+):
+    auth_service.delete_account(
+        current_user,
+        db,
+        current_password=payload.current_password,
+    )
+    return ApiResponse[None](message="Account deleted successfully")
+
 
 @router.get("/google", response_model=ApiResponse[GoogleAuthUrlResponse])
 def google_auth_url():

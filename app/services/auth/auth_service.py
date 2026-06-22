@@ -27,7 +27,9 @@ from app.schemas.auth import (
     UserUpdate,
 )
 from app.services.auth.utils import (
+    decode_typed_payload,
     generate_email_confirm_token,
+    generate_password_reset_token,
     generate_pending_email_token,
 )
 from app.services.email_service import EmailService, EmailTemplate
@@ -125,10 +127,18 @@ def login_user(
     return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
 
-def logout_user(db: Session, user: User, raw_refresh_token: str | None) -> None:
-    """Revoke the provided refresh token (single-device logout)."""
+def logout_user(
+    db: Session,
+    user: User,
+    raw_refresh_token: str | None,
+    *,
+    all_sessions: bool = False,
+) -> None:
+    """Revoke refresh tokens for single-session or all-session logout."""
     user.bump_token_version()
-    if raw_refresh_token:
+    if all_sessions:
+        revoke_all_user_tokens(db, str(user.id))
+    elif raw_refresh_token:
         revoke_refresh_token(db, raw_refresh_token)
     db.commit()
 
@@ -161,6 +171,11 @@ def refresh_access_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or inactive.",
         )
+    if not user.is_email_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email address is not confirmed.",
+        )
 
     revoke_refresh_token(db, raw_refresh_token)
     access_token, new_raw_refresh = issue_token_pair(db, user, request)
@@ -177,11 +192,20 @@ def update_me(
         current_user.display_name = payload.display_name
 
     if payload.email and payload.email != current_user.email:
-        if get_user_by_email(db, payload.email):
+        email_owner = get_user_by_email(db, payload.email)
+        pending_owner = (
+            db.query(User).filter(User.pending_email == payload.email).first()
+        )
+        if email_owner or (pending_owner and pending_owner.id != current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="That email address is already in use.",
             )
+        if current_user.pending_email == payload.email:
+            db.commit()
+            db.refresh(current_user)
+            return UserResponse.model_validate(current_user)
+
         current_user.pending_email = payload.email
 
         confirm_token = generate_pending_email_token(payload.email)
@@ -190,10 +214,10 @@ def update_me(
             payload.email,
             EmailTemplate.VERIFY_EMAIL,
             {
-                "subject": "Confirm your new email address",
                 "display_name": current_user.display_name or current_user.email,
-                "confirm_url": f"{_frontend_url()}/confirm-email?token={confirm_token}&type=email_change",
+                "verification_link": f"{_frontend_url()}/confirm-email?token={confirm_token}&type=email_change",
             },
+            subject="Confirm your new email address",
         )
 
     db.commit()
@@ -236,41 +260,49 @@ def forgot_password(
     Always returns 200 – never reveal whether an email exists.
     """
     user = get_user_by_email(db, payload.email)
-    if user and user.auth_provider == AuthProvider.LOCAL:
-        token = ""
-        background_tasks.add_task(
-            email_service.send,
-            user.email,
-            EmailTemplate.PASSWORD_RESET,
-            {
-                "subject": "Reset your password",
-                "display_name": user.display_name or user.email,
-                "reset_url": f"{_frontend_url()}/reset-password?token={token}",
-                "expires_in_minutes": 60,
-            },
-        )
+    if not user or user.auth_provider != AuthProvider.LOCAL or not user.is_active:
+        return
+
+    token = generate_password_reset_token(user.email, user.token_version or 0)
+    background_tasks.add_task(
+        email_service.send,
+        user.email,
+        EmailTemplate.PASSWORD_RESET,
+        {
+            "display_name": user.display_name or user.email,
+            "reset_url": f"{_frontend_url()}/reset-password?token={token}",
+            "expires_in_minutes": 60,
+        },
+        subject="Reset your password",
+    )
 
 
 def reset_password(
     payload: ResetPasswordRequest,
     db: Session,
 ) -> None:
-    # verify password
-    email = ""
-    if not email:
+    token_payload = decode_typed_payload(payload.token, TokenPurpose.PASSWORD_RESET)
+    email = str(token_payload["sub"])
+
+    user = get_user_by_email(db, email)
+    if not user or not user.is_active or user.auth_provider != AuthProvider.LOCAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This reset link is invalid or has expired.",
+        )
+    if token_payload.get("version") != user.token_version:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This reset link is invalid or has expired.",
         )
 
-    user = get_user_by_email(db, email)
-    if not user:
+    if user.verify_password(payload.new_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User not found.",
+            detail="New password must be different from the current password.",
         )
-
     user.password_hash = hash_password(payload.new_password)
+    user.bump_token_version()
     revoke_all_user_tokens(db, str(user.id))
     db.commit()
 
@@ -303,6 +335,12 @@ def confirm_email(token: str, db: Session) -> None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Token is invalid or this change has already been applied.",
+            )
+        existing_user = get_user_by_email(db, email)
+        if existing_user and existing_user.id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That email address is already in use.",
             )
         user.email = email
         user.pending_email = None
@@ -358,6 +396,35 @@ def resend_confirmation(
     schedule_confirmation_email(background_tasks, user)
 
 
+def delete_account(
+    current_user: User,
+    db: Session,
+    *,
+    current_password: str | None = None,
+) -> None:
+    """Soft-delete the account by deactivating it and revoking all sessions."""
+    if current_user.auth_provider == AuthProvider.LOCAL:
+        if not current_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is required to delete this account.",
+            )
+        if not current_user.verify_password(current_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect.",
+            )
+
+    if not current_user.is_active:
+        return
+
+    current_user.is_active = False
+    current_user.pending_email = None
+    current_user.bump_token_version()
+    revoke_all_user_tokens(db, str(current_user.id))
+    db.commit()
+
+
 def schedule_confirmation_email(background_tasks: BackgroundTasks, user: User) -> None:
     token = generate_email_confirm_token(user.email)
     background_tasks.add_task(
@@ -365,10 +432,10 @@ def schedule_confirmation_email(background_tasks: BackgroundTasks, user: User) -
         user.email,
         EmailTemplate.VERIFY_EMAIL,
         {
-            "subject": "Confirm your email address",
             "display_name": user.display_name or user.email,
             "verification_link": f"{_frontend_url()}/confirm-email?token={token}",
         },
+        subject="Confirm your email address",
     )
 
 
