@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastlimit import FastLimit
 
-from app.api import router
+from app.api.router import router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import setup_logging
@@ -14,22 +15,14 @@ from app.core.schemas import (
     NotFoundResponse,
     ValidationErrorDetail,
 )
-from app.db import Collections, close_mongo_client, close_redis, get_mongo_db
+from app.db import close_redis
 
 setup_logging(env=settings.app_env)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db = get_mongo_db()
-    await db[Collections.FACE_EMBEDDINGS].create_index("event_id")
-    await db[Collections.FACE_EMBEDDINGS].create_index("photo_id")
-    await db[Collections.FACE_EMBEDDINGS].create_index(
-        [("event_id", 1), ("photo_id", 1)]
-    )
     yield
-
-    await close_mongo_client()
     await close_redis()
 
 
@@ -57,6 +50,14 @@ app = FastAPI(
         },
     },
 )
+
+
+def get_user(request: Request):
+    return request.state.user_id if hasattr(request.state, "user_id") else None
+
+
+limiter = FastLimit(redis_url=settings.redis_url, user_id_func=get_user)
+limiter.init_app(app)
 
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
