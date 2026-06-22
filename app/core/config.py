@@ -7,9 +7,7 @@ class Settings(BaseSettings):
     """Application settings."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
     app_name: str = "GallerAI"
@@ -19,6 +17,16 @@ class Settings(BaseSettings):
     secret_key: str = "key-**"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60  # 1 hr
+
+    # Admin
+    admin_access_token_expire_minutes: int = 480  # 8 hrs
+    admin_refresh_token_expire_days: int = 7
+
+    # Cloudinary
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
+    cloudinary_folder_prefix: str = "gallerai"
 
     # PSQL
     postgres_host: str = "localhost"
@@ -30,15 +38,6 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-
-    # mongo
-    mongo_host: str = "localhost"
-    mongo_port: int = 27017
-    mongo_db: str = "gallerai"
-
-    @property
-    def mongo_url(self) -> str:
-        return f"mongodb://{self.mongo_host}:{self.mongo_port}/{self.mongo_db}"
 
     # redis
     redis_host: str = "localhost"
@@ -75,6 +74,21 @@ class Settings(BaseSettings):
 
     default_cache_ttl: int = 300  # 5 min
     refresh_token_expire_days: int = 7
+
+    # google auth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
+
+    # smtp
+    smtp_host: str = "smtp.example.com"
+    smtp_port: int = 587
+    smtp_user: str = "gallerai"
+    smtp_password: str = "password"
+    smtp_from_email: str = "email@gallerai.com"
+    smtp_use_tls: bool = False
+
+    frontend_url: str = "http://localhost:3000"
 
 
 @lru_cache
