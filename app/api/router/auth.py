@@ -71,3 +71,21 @@ def update_me(current_user: CurrentUser):
         message="Current user retrieved successfully",
         data=UserResponse.model_validate(current_user),
     )
+
+@router.get("/google", response_model=ApiResponse[GoogleAuthUrlResponse])
+def google_auth_url():
+    return ApiResponse[GoogleAuthUrlResponse](
+        message="Google authorization URL generated successfully",
+        data=GoogleAuthUrlResponse(auth_url=google_oauth.get_google_auth_url()),
+    )
+
+
+@router.get("/google/callback", response_model=ApiResponse[TokenResponse])
+def google_callback(
+    request: Request,
+    db: DB,
+    code: Annotated[str, Query()],
+    state: Annotated[str | None, Query()] = None,
+):
+    data = google_oauth.google_callback(code, db, request, state=state)
+    return ApiResponse[TokenResponse](message="Google login successful", data=data)
