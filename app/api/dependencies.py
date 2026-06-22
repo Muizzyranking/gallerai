@@ -11,7 +11,10 @@ from app.core.enums import (
     InviteStatus,
     MemberStatus,
 )
-from app.core.security import decode_access_token_for_user, verify_hash
+from app.core.security import (
+    decode_access_token_for_user,
+    verify_hash,
+)
 from app.db import get_db
 from app.models.event import Event, EventInvite, EventMember
 from app.models.user import User
@@ -31,7 +34,7 @@ def get_current_user(request: Request, credentials: Credentials, db: DB) -> User
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    user_id = decode_access_token_for_user(credentials.credentials)
+    user_id, version = decode_access_token_for_user(credentials.credentials)
 
     if not user_id:
         raise HTTPException(
@@ -45,6 +48,15 @@ def get_current_user(request: Request, credentials: Credentials, db: DB) -> User
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated",
+        )
+    if user.token_version != version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked"
+        )
     request.state.user_id = str(user.id)
     return user
 
@@ -54,13 +66,17 @@ def get_current_user_optional(
 ) -> User | None:
     if not credentials:
         return None
-    user_id = decode_access_token_for_user(credentials.credentials)
+    try:
+        user_id, version = decode_access_token_for_user(credentials.credentials)
+    except HTTPException:
+        return None
     if not user_id:
         return None
     user = db.query(User).filter(User.id == user_id).first()
-    if user:
+    if user and user.is_active and user.token_version == version:
         request.state.user_id = str(user.id)
-    return user
+        return user
+    return None
 
 
 def get_event_or_404(event_id: str, db: DB) -> Event:
@@ -137,10 +153,10 @@ def user_is_active_member(db: Session, event_id: str, user_id: str) -> bool:
 
 
 async def get_event_access(
+    db: DB,
     event: Annotated[Event, Depends(get_event_or_404)],
     current_user: Annotated[User | None, Depends(get_current_user_optional)],
     access_code: Annotated[str | None, Query(description="Event access code")] = None,
-    db: DB = None,
 ) -> Event:
     """
     Validate attendee-level access to an event.
@@ -215,12 +231,18 @@ async def get_event_access(
 
 
 def require_admin(current_user: Annotated[User, Depends(get_current_user)]) -> User:
-    if not current_user.is_active:
+    if not current_user.is_admin or not current_user.is_superadmin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is deactivated",
+            detail="Admin access required",
         )
-    if not current_user.is_admin:
+    return current_user
+
+
+def require_superadmin(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    if not current_user.is_superadmin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
@@ -234,3 +256,4 @@ EventOr404 = Annotated[Event, Depends(get_event_or_404)]
 OrganizerEvent = Annotated[Event, Depends(require_event_organizer)]
 AccessibleEvent = Annotated[Event, Depends(get_event_access)]
 AdminUser = Annotated[User, Depends(require_admin)]
+SuperAdminUser = Annotated[User, Depends(require_superadmin)]
