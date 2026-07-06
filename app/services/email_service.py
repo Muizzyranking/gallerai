@@ -10,8 +10,6 @@ from typing import Any, Final, Literal, Self
 import aiosmtplib
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound, select_autoescape
 
-from app.core.config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -70,12 +68,12 @@ class EmailService:
         use_tls: bool = True,
         template_dir: str | Path = "app/templates/emails",
     ) -> None:
-        self._smtp_host: str = settings.smtp_host
-        self._smtp_port: int = settings.smtp_port
-        self._smtp_user: str = settings.smtp_user
-        self._smtp_password: str = settings.smtp_password
-        self._use_tls: bool = settings.smtp_use_tls
-        self._from_email: str = settings.smtp_from_email
+        self._smtp_host: str = smtp_host
+        self._smtp_port: int = smtp_port
+        self._smtp_user: str = smtp_user
+        self._smtp_password: str = smtp_password
+        self._use_tls: bool = use_tls
+        self._from_email: str = from_email
         self._template_dir: Path = Path(template_dir)
 
         self._jinja_env: Environment = Environment(
