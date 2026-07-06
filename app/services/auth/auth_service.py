@@ -117,11 +117,11 @@ def login_user(
             detail="This account has been deactivated.",
         )
 
-    if not user.is_email_confirmed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email address is not confirmed. Please check your inbox for the confirmation email.",
-        )
+    # if not user.is_email_confirmed:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="Email address is not confirmed. Please check your inbox for the confirmation email.",
+    #     )
 
     access_token, raw_refresh = issue_token_pair(db, user, request)
     return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
