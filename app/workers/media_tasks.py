@@ -5,6 +5,7 @@ from io import BytesIO
 from typing import Any
 
 from celery import group
+from starlette.datastructures import Headers
 from starlette.datastructures import UploadFile as StarletteUpload
 
 from app.core.config import settings
@@ -34,7 +35,7 @@ async def _promote_to_cloud(media, local_storage, cloud_storage) -> Any:
 
     upload = StarletteUpload(
         filename=media.filename or media.storage_key,
-        headers={"content-type": media.mime_type},
+        headers=Headers({"content-type": media.mime_type}),
         file=BytesIO(content),
     )
 
@@ -91,7 +92,7 @@ def upload_media_task(self, media_id: str) -> dict[str, Any]:
             "upload_media_task: media %s uploaded to %s", media_id, result.backend
         )
 
-        cleanup_local_task.delay(media_id=media_id)  # type: ignore
+        cleanup_local_task.delay(media_id=media_id)
 
         return {"status": "uploaded", "media_id": media_id, "backend": result.backend}
 
@@ -181,7 +182,7 @@ def detect_faces_task(self, media_id: str) -> dict[str, Any]:
         media.processed_at = datetime.now(timezone.utc)
         db.commit()
 
-        cleanup_local_task.delay(media_id=media_id)  # type: ignore
+        cleanup_local_task.delay(media_id=media_id)
 
         return {"status": "processed", "media_id": media_id, "face_count": len(faces)}
 
@@ -280,8 +281,8 @@ def dispatch_image_tasks(media_id: str) -> None:
     on completion and self-gates on the combined terminal state.
     """
     task_group = group(
-        upload_media_task.s(media_id=media_id),  # type: ignore
-        detect_faces_task.s(media_id=media_id),  # type: ignore
+        upload_media_task.s(media_id=media_id),
+        detect_faces_task.s(media_id=media_id),
     )
     task_group.delay()
 
@@ -291,7 +292,7 @@ def dispatch_video_tasks(media_id: str) -> None:
     Dispatch only the upload task for a video (no face pipeline).
     cleanup_local_task is triggered by upload_media_task on completion.
     """
-    upload_media_task.delay(media_id=media_id)  # type: ignore
+    upload_media_task.delay(media_id=media_id)
 
 
 @celery_app.task(name="photo_tasks.warmup_models")

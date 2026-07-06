@@ -58,6 +58,9 @@ def register_exception_handlers(app: FastAPI) -> None:
             }
             for error in exc.errors()
         ]
+        logger.exception(
+            f"Unhandled exception on {request.method} {request.url.path}: {exc}"
+        )
         return _error_response(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             message="Validation failed",

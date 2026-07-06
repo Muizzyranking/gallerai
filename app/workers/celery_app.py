@@ -11,7 +11,7 @@ celery_app = Celery(
     "gallerai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.workers.photo_tasks"],
+    include=["app.workers.media_tasks"],
 )
 
 celery_app.conf.update(
@@ -34,6 +34,6 @@ def on_worker_ready(sender, **kwargs):
     task doesn't pay the cold-start penalty.
     """
     logger.info("Worker ready — triggering DeepFace warmup")
-    from app.workers.photo_tasks import warmup_models_task
+    from app.workers.media_tasks import warmup_models_task
 
-    warmup_models_task.delay()  # type: ignore
+    warmup_models_task.delay()
