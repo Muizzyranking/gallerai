@@ -15,7 +15,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn galleria.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker:
     build: .
@@ -24,12 +25,18 @@ services:
       - deepface_weights:/root/.deepface
     env_file:
       - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_HOST=redis
     depends_on:
+      api:
+        condition: service_started
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A galleria.workers.celery_app worker --loglevel=info --concurrency=2
+    command: >
+      uv run celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -40,7 +47,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gallerai"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
