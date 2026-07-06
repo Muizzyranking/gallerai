@@ -10,7 +10,8 @@ from app.schemas.gallery import (
     FlagPhotoRequest,
     GalleryResponse,
 )
-from app.schemas.photo import PhotoResponse, PhotoSchema
+from app.schemas.media import MediaListResponse
+from app.schemas.photo import PhotoSchema
 from app.services import gallery_service, media_service
 
 router = APIRouter()
@@ -18,7 +19,7 @@ router = APIRouter()
 
 @router.get(
     "",
-    response_model=ApiResponse[PhotoResponse],
+    response_model=ApiResponse[MediaListResponse],
     summary="Full event gallery — all non-private photos",
 )
 async def get_full_gallery(
@@ -31,7 +32,7 @@ async def get_full_gallery(
     Return all non-private photos for an event.
     Requires valid event access. Paginated.
     """
-    return ApiResponse[PhotoResponse](
+    return ApiResponse[MediaListResponse](
         message="Gallery retrieved successfully",
         data=await media_service.list_event_media_public(event.id, db, page, page_size),
     )
