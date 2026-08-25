@@ -3,10 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Query, Request, status
 from fastlimit import rate_limit
 
-from app.api.dependencies import DB, CurrentUser
+from app.api.dependencies import AsyncDB, CurrentUser
 from app.core.schemas import ApiResponse
 from app.schemas.auth import (
     ChangePasswordRequest,
+    ConfirmEmailRequest,
     DeleteAccountRequest,
     EmailConfirmRequest,
     ForgotPasswordRequest,
@@ -32,8 +33,8 @@ router = APIRouter()
     status_code=201,
     dependencies=[rate_limit("5/min", user="10/min")],
 )
-def register(payload: UserCreate, db: DB, bg_task: BackgroundTasks):
-    auth_service.register_user(payload, db, bg_task)
+async def register(payload: UserCreate, db: AsyncDB, bg_task: BackgroundTasks):
+    await auth_service.register_user(payload, db, bg_task)
     return ApiResponse[None](
         message="User registered successfully, check email for confirmation link"
     )
@@ -44,8 +45,8 @@ def register(payload: UserCreate, db: DB, bg_task: BackgroundTasks):
     response_model=ApiResponse[None],
     status_code=200,
 )
-def email_confirmation(token: Annotated[str, Query()], db: DB):
-    auth_service.confirm_email(token, db)
+async def email_confirmation(payload: ConfirmEmailRequest, db: AsyncDB):
+    await auth_service.confirm_email(payload.token, db)
     return ApiResponse[None](message="Email confirmed successfully")
 
 
@@ -54,18 +55,18 @@ def email_confirmation(token: Annotated[str, Query()], db: DB):
     response_model=ApiResponse[None],
     status_code=status.HTTP_200_OK,
 )
-def verify_email(payload: EmailConfirmRequest, db: DB):
-    auth_service.confirm_email(payload.token, db)
+async def verify_email(payload: EmailConfirmRequest, db: AsyncDB):
+    await auth_service.confirm_email(payload.token, db)
     return ApiResponse[None](message="Email confirmed successfully")
 
 
 @router.post(
     "/resend_email_confirmation", response_model=ApiResponse[None], status_code=201
 )
-def resend_email_confirmation(
-    email: Annotated[str, Query()], db: DB, bg_task: BackgroundTasks
+async def resend_email_confirmation(
+    email: Annotated[str, Query()], db: AsyncDB, bg_task: BackgroundTasks
 ):
-    auth_service.resend_confirmation(email, db, bg_task)
+    await auth_service.resend_confirmation(email, db, bg_task)
     return ApiResponse[None](message="Confirmation email resent successfully")
 
 
@@ -74,28 +75,28 @@ def resend_email_confirmation(
     response_model=ApiResponse[None],
     status_code=status.HTTP_201_CREATED,
 )
-def resend_email_verification(
-    payload: ResendConfirmationRequest, db: DB, bg_task: BackgroundTasks
+async def resend_email_verification(
+    payload: ResendConfirmationRequest, db: AsyncDB, bg_task: BackgroundTasks
 ):
-    auth_service.resend_confirmation(payload.email, db, bg_task)
+    await auth_service.resend_confirmation(payload.email, db, bg_task)
     return ApiResponse[None](message="Confirmation email resent successfully")
 
 
 @router.post("/login", response_model=ApiResponse[TokenResponse])
-def login(request: Request, payload: UserLogin, db: DB):
+def login(request: Request, payload: UserLogin, db: AsyncDB):
     data = auth_service.login_user(payload, db, request)
     return ApiResponse[TokenResponse](message="Login successful", data=data)
 
 
 @router.post("/refresh", response_model=ApiResponse[TokenResponse])
-def refresh_token(request: Request, payload: RefreshTokenRequest, db: DB):
+def refresh_token(request: Request, payload: RefreshTokenRequest, db: AsyncDB):
     data = auth_service.refresh_access_token(db, payload.refresh_token, request)
     return ApiResponse[TokenResponse](message="Token refreshed successfully", data=data)
 
 
 @router.post("/logout", response_model=ApiResponse[None])
-def logout(current_user: CurrentUser, db: DB, payload: LogoutUser):
-    auth_service.logout_user(
+async def logout(current_user: CurrentUser, db: AsyncDB, payload: LogoutUser):
+    await auth_service.logout_user(
         db,
         current_user,
         payload.refresh_token,
@@ -105,26 +106,28 @@ def logout(current_user: CurrentUser, db: DB, payload: LogoutUser):
 
 
 @router.post("/forgot-password", response_model=ApiResponse[None])
-def forgot_password(
+async def forgot_password(
     payload: ForgotPasswordRequest,
-    db: DB,
+    db: AsyncDB,
     bg_task: BackgroundTasks,
 ):
-    auth_service.forgot_password(payload, db, bg_task)
+    await auth_service.forgot_password(payload, db, bg_task)
     return ApiResponse[None](
         message="If the email exists, a password reset link has been sent"
     )
 
 
 @router.post("/reset-password", response_model=ApiResponse[None])
-def reset_password(payload: ResetPasswordRequest, db: DB):
-    auth_service.reset_password(payload, db)
+async def reset_password(payload: ResetPasswordRequest, db: AsyncDB):
+    await auth_service.reset_password(payload, db)
     return ApiResponse[None](message="Password reset successfully")
 
 
 @router.post("/change-password", response_model=ApiResponse[None])
-def change_password(payload: ChangePasswordRequest, current_user: CurrentUser, db: DB):
-    auth_service.change_password(payload, current_user, db)
+async def change_password(
+    payload: ChangePasswordRequest, current_user: CurrentUser, db: AsyncDB
+):
+    await auth_service.change_password(payload, current_user, db)
     return ApiResponse[None](message="Password changed successfully")
 
 
@@ -140,7 +143,7 @@ def me(current_user: CurrentUser):
 def update_me(
     payload: UserUpdate,
     current_user: CurrentUser,
-    db: DB,
+    db: AsyncDB,
     bg_task: BackgroundTasks,
 ):
     data = auth_service.update_me(payload, current_user, db, bg_task)
@@ -151,12 +154,12 @@ def update_me(
 
 
 @router.delete("/me", response_model=ApiResponse[None])
-def delete_account(
+async def delete_account(
     payload: DeleteAccountRequest,
     current_user: CurrentUser,
-    db: DB,
+    db: AsyncDB,
 ):
-    auth_service.delete_account(
+    await auth_service.delete_account(
         current_user,
         db,
         current_password=payload.current_password,
@@ -173,11 +176,11 @@ def google_auth_url():
 
 
 @router.get("/google/callback", response_model=ApiResponse[TokenResponse])
-def google_callback(
+async def google_callback(
     request: Request,
-    db: DB,
+    db: AsyncDB,
     code: Annotated[str, Query()],
     state: Annotated[str | None, Query()] = None,
 ):
-    data = google_oauth.google_callback(code, db, request, state=state)
+    data = await google_oauth.google_callback(code, db, request, state=state)
     return ApiResponse[TokenResponse](message="Google login successful", data=data)

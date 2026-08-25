@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, HTTPException, Request, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import AuthProvider
 from app.core.security import (
@@ -15,6 +15,7 @@ from app.core.security import (
     revoke_refresh_token,
     verify_refresh_token,
 )
+from app.db.postgres import fetch_one
 from app.models.user import User
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -41,22 +42,22 @@ email_service = EmailService.from_settings()
 RESEND_COOLDOWN_SECONDS = 60
 
 
-def get_user_by_email(db: Session, email: str) -> User | None:
-    return db.query(User).filter(User.email == email).first()
+async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
+    return await fetch_one(db, User, User.email == email)
 
 
-def get_user_by_id(db: Session, user_id: str) -> User | None:
-    return db.query(User).filter(User.id == user_id).first()
+async def get_user_by_id(db: AsyncSession, user_id: str) -> User | None:
+    return await fetch_one(db, User, User.id == user_id)
 
 
-def issue_token_pair(
-    db: Session,
+async def issue_token_pair(
+    db: AsyncSession,
     user: User,
     request: Request,
 ) -> tuple[str, str]:
     """Return (access_token, raw_refresh_token)."""
     access_token = create_access_token_for_user(user)
-    raw_refresh = create_refresh_token(
+    raw_refresh = await create_refresh_token(
         db,
         str(user.id),
         user_agent=request.headers.get("user-agent"),
@@ -65,16 +66,25 @@ def issue_token_pair(
     return access_token, raw_refresh
 
 
-def register_user(
+def derive_display_name(email: str, fallback: str | None) -> str:
+    if fallback and fallback.strip():
+        return fallback.strip()
+
+    local = email.split("@")[0]
+    name = local.replace(".", " ").replace("_", " ").replace("-", " ")
+    return " ".join(part.capitalize() for part in name.split())
+
+
+async def register_user(
     payload: UserCreate,
-    db: Session,
+    db: AsyncSession,
     background_tasks: BackgroundTasks,
 ) -> None:
     """
     Create a new user, fire confirmation email in background.
     Returns (TokenResponse, raw_refresh_token).
     """
-    if get_user_by_email(db, payload.email):
+    if await get_user_by_email(db, payload.email):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists.",
@@ -82,28 +92,28 @@ def register_user(
 
     user = User(
         email=payload.email,
-        display_name=payload.display_name,
+        display_name=derive_display_name(payload.email, payload.display_name),
         auth_provider=AuthProvider.LOCAL,
         is_email_confirmed=False,
     )
     user.hash_password(payload.password)
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
     schedule_confirmation_email(background_tasks, user)
 
 
-def login_user(
+async def login_user(
     payload: UserLogin,
-    db: Session,
+    db: AsyncSession,
     request: Request,
 ) -> TokenResponse:
     """
     Validate credentials, issue token pair.
     Returns (TokenResponse, raw_refresh_token).
     """
-    user = get_user_by_email(db, payload.email)
+    user = await get_user_by_email(db, payload.email)
 
     if not user or not user.verify_password(payload.password):
         raise HTTPException(
@@ -123,12 +133,12 @@ def login_user(
     #         detail="Email address is not confirmed. Please check your inbox for the confirmation email.",
     #     )
 
-    access_token, raw_refresh = issue_token_pair(db, user, request)
+    access_token, raw_refresh = await issue_token_pair(db, user, request)
     return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
 
-def logout_user(
-    db: Session,
+async def logout_user(
+    db: AsyncSession,
     user: User,
     raw_refresh_token: str | None,
     *,
@@ -137,14 +147,14 @@ def logout_user(
     """Revoke refresh tokens for single-session or all-session logout."""
     user.bump_token_version()
     if all_sessions:
-        revoke_all_user_tokens(db, str(user.id))
+        await revoke_all_user_tokens(db, str(user.id))
     elif raw_refresh_token:
-        revoke_refresh_token(db, raw_refresh_token)
-    db.commit()
+        await revoke_refresh_token(db, raw_refresh_token)
+    await db.commit()
 
 
-def refresh_access_token(
-    db: Session,
+async def refresh_access_token(
+    db: AsyncSession,
     raw_refresh_token: str | None,
     request: Request,
 ) -> TokenResponse:
@@ -158,14 +168,14 @@ def refresh_access_token(
             detail="No refresh token provided.",
         )
 
-    token_obj = verify_refresh_token(db, raw_refresh_token)
+    token_obj = await verify_refresh_token(db, raw_refresh_token)
     if not token_obj:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token.",
         )
 
-    user = get_user_by_id(db, str(token_obj.user_id))
+    user = await get_user_by_id(db, str(token_obj.user_id))
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -177,33 +187,31 @@ def refresh_access_token(
             detail="Email address is not confirmed.",
         )
 
-    revoke_refresh_token(db, raw_refresh_token)
-    access_token, new_raw_refresh = issue_token_pair(db, user, request)
+    await revoke_refresh_token(db, raw_refresh_token)
+    access_token, new_raw_refresh = await issue_token_pair(db, user, request)
     return TokenResponse(access_token=access_token, refresh_token=new_raw_refresh)
 
 
-def update_me(
+async def update_me(
     payload: UserUpdate,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
     background_tasks: BackgroundTasks,
 ) -> UserResponse:
     if payload.display_name is not None:
         current_user.display_name = payload.display_name
 
     if payload.email and payload.email != current_user.email:
-        email_owner = get_user_by_email(db, payload.email)
-        pending_owner = (
-            db.query(User).filter(User.pending_email == payload.email).first()
-        )
+        email_owner = await get_user_by_email(db, payload.email)
+        pending_owner = await fetch_one(db, User, User.pending_email == payload.email)
         if email_owner or (pending_owner and pending_owner.id != current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="That email address is already in use.",
             )
         if current_user.pending_email == payload.email:
-            db.commit()
-            db.refresh(current_user)
+            await db.commit()
+            await db.refresh(current_user)
             return UserResponse.model_validate(current_user)
 
         current_user.pending_email = payload.email
@@ -220,15 +228,15 @@ def update_me(
             subject="Confirm your new email address",
         )
 
-    db.commit()
-    db.refresh(current_user)
+    await db.commit()
+    await db.refresh(current_user)
     return UserResponse.model_validate(current_user)
 
 
-def change_password(
+async def change_password(
     payload: ChangePasswordRequest,
     current_user: User,
-    db: Session,
+    db: AsyncSession,
 ) -> None:
     if current_user.auth_provider != AuthProvider.LOCAL:
         raise HTTPException(
@@ -247,44 +255,40 @@ def change_password(
         )
     current_user.hash_password(payload.new_password)
     current_user.bump_token_version()
-    revoke_all_user_tokens(db, str(current_user.id))
-    db.commit()
+    await revoke_all_user_tokens(db, str(current_user.id))
+    await db.commit()
 
 
-def forgot_password(
+async def forgot_password(
     payload: ForgotPasswordRequest,
-    db: Session,
+    db: AsyncSession,
     background_tasks: BackgroundTasks,
 ) -> None:
     """
     Always returns 200 – never reveal whether an email exists.
     """
-    user = get_user_by_email(db, payload.email)
+    user = await get_user_by_email(db, payload.email)
     if not user or user.auth_provider != AuthProvider.LOCAL or not user.is_active:
         return
 
     token = generate_password_reset_token(user.email, user.token_version or 0)
     background_tasks.add_task(
-        email_service.send,
-        user.email,
-        EmailTemplate.PASSWORD_RESET,
-        {
-            "display_name": user.display_name or user.email,
-            "reset_url": f"{_frontend_url()}/reset-password?token={token}",
-            "expires_in_minutes": 60,
-        },
-        subject="Reset your password",
+        email_service.send_password_reset,
+        to=user.email,
+        reset_url=f"{_frontend_url()}/reset-password?token={token}",
+        expires_in_minutes=60,
+        display_name=user.display_name or user.email,
     )
 
 
-def reset_password(
+async def reset_password(
     payload: ResetPasswordRequest,
-    db: Session,
+    db: AsyncSession,
 ) -> None:
     token_payload = decode_typed_payload(payload.token, TokenPurpose.PASSWORD_RESET)
     email = str(token_payload["sub"])
 
-    user = get_user_by_email(db, email)
+    user = await get_user_by_email(db, email)
     if not user or not user.is_active or user.auth_provider != AuthProvider.LOCAL:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -303,11 +307,11 @@ def reset_password(
         )
     user.password_hash = hash_password(payload.new_password)
     user.bump_token_version()
-    revoke_all_user_tokens(db, str(user.id))
-    db.commit()
+    await revoke_all_user_tokens(db, str(user.id))
+    await db.commit()
 
 
-def confirm_email(token: str, db: Session) -> None:
+async def confirm_email(token: str, db: AsyncSession) -> None:
     """
     Handles both initial confirmation (EMAIL_CONFIRM) and email-change
     confirmation (EMAIL_CHANGE). Decode once, branch on purpose.
@@ -330,13 +334,13 @@ def confirm_email(token: str, db: Session) -> None:
         )
 
     if purpose == str(TokenPurpose.EMAIL_CHANGE):
-        user = db.query(User).filter(User.pending_email == email).first()
+        user = await fetch_one(db, User, User.pending_email == email)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Token is invalid or this change has already been applied.",
             )
-        existing_user = get_user_by_email(db, email)
+        existing_user = await get_user_by_email(db, email)
         if existing_user and existing_user.id != user.id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -346,11 +350,11 @@ def confirm_email(token: str, db: Session) -> None:
         user.pending_email = None
         user.is_email_confirmed = True
         user.bump_token_version()
-        revoke_all_user_tokens(db, str(user.id))
-        db.commit()
+        await revoke_all_user_tokens(db, str(user.id))
+        await db.commit()
 
     elif purpose == str(TokenPurpose.EMAIL_CONFIRM):
-        user = get_user_by_email(db, email)
+        user = await get_user_by_email(db, email)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -362,7 +366,7 @@ def confirm_email(token: str, db: Session) -> None:
                 detail="Email is already confirmed.",
             )
         user.is_email_confirmed = True
-        db.commit()
+        await db.commit()
 
     else:
         raise HTTPException(
@@ -371,11 +375,11 @@ def confirm_email(token: str, db: Session) -> None:
         )
 
 
-def resend_confirmation(
-    email: str, db: Session, background_tasks: BackgroundTasks
+async def resend_confirmation(
+    email: str, db: AsyncSession, background_tasks: BackgroundTasks
 ) -> None:
     """Rate-limited via last_confirmation_sent_at on the User model (no Redis needed)."""
-    user = get_user_by_email(db, email)
+    user = await get_user_by_email(db, email)
 
     if not user or user.is_email_confirmed:
         return
@@ -391,14 +395,14 @@ def resend_confirmation(
             )
 
     user.last_confirmation_sent_at = now
-    db.commit()
+    await db.commit()
 
     schedule_confirmation_email(background_tasks, user)
 
 
-def delete_account(
+async def delete_account(
     current_user: User,
-    db: Session,
+    db: AsyncSession,
     *,
     current_password: str | None = None,
 ) -> None:
@@ -421,21 +425,17 @@ def delete_account(
     current_user.is_active = False
     current_user.pending_email = None
     current_user.bump_token_version()
-    revoke_all_user_tokens(db, str(current_user.id))
-    db.commit()
+    await revoke_all_user_tokens(db, str(current_user.id))
+    await db.commit()
 
 
 def schedule_confirmation_email(background_tasks: BackgroundTasks, user: User) -> None:
     token = generate_email_confirm_token(user.email)
     background_tasks.add_task(
-        email_service.send,
+        email_service.send_email_verification,
         user.email,
-        EmailTemplate.VERIFY_EMAIL,
-        {
-            "display_name": user.display_name or user.email,
-            "verification_link": f"{_frontend_url()}/confirm-email?token={token}",
-        },
-        subject="Confirm your email address",
+        f"{_frontend_url()}/confirm-email?token={token}",
+        user.display_name or user.email,
     )
 
 

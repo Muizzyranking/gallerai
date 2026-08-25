@@ -3,7 +3,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.enums import AuthProvider
@@ -14,8 +15,10 @@ from app.services.auth.auth_service import get_user_by_email, issue_token_pair
 logger = logging.getLogger(__name__)
 
 
-def get_user_by_google_id(db: Session, google_id: str) -> User | None:
-    return db.query(User).filter(User.google_id == google_id).first()
+async def get_user_by_google_id(db: AsyncSession, google_id: str) -> User | None:
+    stmt = select(User).where(User.google_id == google_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 def _get_google_user_info(code: str, redirect_uri: str) -> dict[str, Any]:
@@ -69,9 +72,9 @@ def _get_google_user_info(code: str, redirect_uri: str) -> dict[str, Any]:
     return profile_resp.json()
 
 
-def google_callback(
+async def google_callback(
     code: str,
-    db: Session,
+    db: AsyncSession,
     request: Request,
     state: str | None = None,
 ) -> TokenResponse:
@@ -98,18 +101,18 @@ def google_callback(
             detail="Google did not return a verified email profile.",
         )
 
-    user = get_user_by_google_id(db, google_id)
+    user = await get_user_by_google_id(db, google_id)
     if user:
         if not user.is_active:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This account has been deactivated.",
             )
-        access_token, raw_refresh = issue_token_pair(db, user, request)
+        access_token, raw_refresh = await issue_token_pair(db, user, request)
         return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
-    # 2. Email already registered locally → merge
-    user = get_user_by_email(db, email)
+    # Email already registered locally → merge
+    user = await get_user_by_email(db, email)
     if user:
         if not user.is_active:
             raise HTTPException(
@@ -117,27 +120,26 @@ def google_callback(
                 detail="This account has been deactivated.",
             )
         user.google_id = google_id
-        # Trust Google's email verification
         if verified and not user.is_email_confirmed:
             user.is_email_confirmed = True
-        db.commit()
-        db.refresh(user)
-        access_token, raw_refresh = issue_token_pair(db, user, request)
+        await db.commit()
+        await db.refresh(user)
+        access_token, raw_refresh = await issue_token_pair(db, user, request)
         return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
-    # 3. Brand new user via Google
+    # Brand new user via Google
     user = User(
         email=email,
         display_name=name or None,
         auth_provider=AuthProvider.GOOGLE,
         google_id=google_id,
-        is_email_confirmed=verified,  # Google already verified it
+        is_email_confirmed=verified,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
-    access_token, raw_refresh = issue_token_pair(db, user, request)
+    access_token, raw_refresh = await issue_token_pair(db, user, request)
     return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
 
