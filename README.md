@@ -1,8 +1,8 @@
 # Galleria
 
-> Event photo sharing powered by face recognition. Find yourself in every moment.
+> Event photo and video sharing powered by face recognition. Find yourself in every moment.
 
-Galleria is a full-stack event photo platform that eliminates the tedious process of scrolling through hundreds of event photos to find yourself. Organizers upload photos, Galleria processes them asynchronously using deep learning face recognition, and attendees scan their face once to instantly retrieve every photo they appear in.
+Galleria is a full-stack event media platform that eliminates the tedious process of scrolling through hundreds of event photos to find yourself. Organizers upload photos and videos, Galleria processes them asynchronously using deep learning face recognition, and attendees scan their face once to instantly retrieve every photo they appear in.
 
 ---
 
@@ -15,6 +15,7 @@ Galleria is a full-stack event photo platform that eliminates the tedious proces
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Database Design](#database-design)
+- [Storage Architecture](#storage-architecture)
 - [Face Recognition Pipeline](#face-recognition-pipeline)
 - [Access Control System](#access-control-system)
 - [API Reference](#api-reference)
@@ -24,41 +25,59 @@ Galleria is a full-stack event photo platform that eliminates the tedious proces
 - [Running Tests](#running-tests)
 - [Deployment](#deployment)
 - [Design Decisions](#design-decisions)
+- [Roadmap](#roadmap)
 
 ---
 
 ## Overview
 
-Galleria solves a universal problem at events — weddings, conferences, graduations, sports days, parties. The photographer takes hundreds of photos. They get uploaded somewhere. Attendees spend an hour scrolling through all of them trying to find the ten that include them.
+Galleria solves a universal problem at events — weddings, conferences, graduations, sports days, parties. The photographer takes hundreds of photos and clips. They get uploaded somewhere. Attendees spend an hour scrolling through all of them trying to find the ten that include them.
 
 With Galleria, that process takes ten seconds. The attendee opens the event link, taps "Find My Photos", holds their phone up to their face, and gets back a filtered gallery containing only the photos they appear in. They can download them all with one tap.
 
-For organizers, Galleria provides a clean dashboard to create events, upload photos in bulk, control who has access, manage co-organizers, and optionally allow attendees to contribute their own photos.
+For organizers, Galleria provides a clean dashboard to create events, upload media in bulk (with live progress and an ETA), control who has access, manage co-organizers, and optionally allow attendees to contribute their own photos and videos.
 
 ---
 
 ## How It Works
 
-### Photo Processing (Organizer Side)
+### Media Processing (Organizer & Attendee Upload)
+
+Uploads are ingested in fixed-size chunks rather than one giant batch, so a 300-file upload starts processing its first files while the last ones are still being received and hashed.
 
 ```
-Organizer uploads photos
+Organizer or attendee uploads files
         ↓
-FastAPI receives files → validates type and size → saves to storage
+FastAPI receives files → validates type/size → streams each one to a TEMP
+staging area, hashing while writing (one I/O pass, not a hash-then-write pass)
         ↓
-Creates Photo records in PostgreSQL (status: pending)
+Per chunk of ~25 files: one batched dedupe query against existing event
+media, one bulk insert for the survivors (a race between two concurrent
+uploaders is caught by the DB's UNIQUE constraint and retried row-by-row,
+not lost)
         ↓
-Dispatches one Celery task per photo to Redis queue
+Celery tasks dispatched immediately for that chunk — later chunks don't
+wait on earlier ones to finish uploading
         ↓
-Celery worker picks up task:
-    → Loads image from storage
-    → Runs RetinaFace to detect all faces in the image
-    → Filters out low-confidence detections (< 0.9) and tiny faces (< 80px)
-    → For each valid face: runs ArcFace to extract 512-dimensional embedding
-    → Stores each embedding as a document in MongoDB
-    → Updates Photo status to "processed" with face count
+For each IMAGE, sequentially:
+    1. Detect faces (RetinaFace) on the temp file — large images are
+       downscaled first for speed, with results scaled back to original
+       coordinates
+    2. Filter out low-confidence (< FACE_DETECTION_CONFIDENCE) and tiny
+       (< FACE_MIN_SIZE) detections
+    3. Extract a 512-dim ArcFace embedding per remaining face, store one
+       row per face in Postgres (pgvector)
+    4. Promote the temp file to whichever backend is currently configured
+       (local / Cloudinary / Cloudflare R2 — identical call shape for all
+       three) and delete the temp copy
+For each VIDEO: promote only — no face pipeline runs on video
         ↓
-Organizer polls GET /events/{id}/photos/status to track progress
+Progress is published to Redis, keyed by event_id (not a one-off upload id)
+        ↓
+Organizer or attendee watches live progress + ETA via GET
+/events/{id}/media/upload-progress (Server-Sent Events) — reconnect any
+time and get the current state immediately, including progress from OTHER
+people uploading to the same event concurrently
 ```
 
 ### Face Search (Attendee Side)
@@ -68,23 +87,21 @@ Attendee uploads or webcam-captures a clear photo of their face
         ↓
 FastAPI extracts a single 512-dim ArcFace embedding from the image
         ↓
-Fetches all face embedding documents for this event from MongoDB
+Native pgvector cosine-similarity query against face_embeddings for this
+event — the comparison runs inside Postgres, not in application memory
         ↓
-Runs batched cosine similarity:
-    user_embedding (1 × 512) · event_embeddings (N × 512) = scores (N,)
-        ↓
-Deduplicates by photo — keeps highest score per photo
+Deduplicates by media — keeps highest score per photo
 Filters results above similarity threshold (default: 0.6)
         ↓
-Returns matched photo IDs sorted by confidence score
+Returns matched media IDs sorted by confidence score
 
 If registered user:
     → Saves embedding to user profile
-    → Upserts matched photos into user_event_galleries table
+    → Upserts matched media into user_event_galleries table
     → User can revisit gallery without rescanning
 
 If anonymous user:
-    → Matched photo IDs stored in Redis with 2-hour TTL
+    → Matched media IDs stored in Redis with 2-hour TTL
     → Returns scan_token for gallery retrieval
     → Embedding is never persisted
 ```
@@ -95,27 +112,25 @@ If anonymous user:
 
 ### For Organizers
 - Create events with configurable access control (link, code, approved list, or combined)
-- Bulk photo upload with async face processing pipeline
-- Real-time processing status tracking
+- Bulk photo/video upload with an async, chunked, concurrent processing pipeline
+- Live upload progress with ETA via Server-Sent Events — reconnect any time, see progress from all concurrent uploaders
 - Co-organizer management
-- Photo visibility controls (public/private per photo)
+- Media visibility controls (public/private per item)
 - Attendee upload support with optional approval workflow
 - Event settings (downloads, gallery visibility, attendee uploads)
-- Admin panel for platform management
 
 ### For Attendees
 - Face scan via webcam capture or photo upload
 - Instant gallery of matched photos
-- Download individual photos or entire gallery as zip
+- Download individual media or entire gallery as zip
 - False match flagging with reason (not me / dislike / remove)
 - Anonymous access — no account required
 - Gallery claiming — convert anonymous results into a saved account gallery
 - Attended events list for revisiting galleries
+- Google OAuth login, alongside email/password
 
 ### Platform
-- Admin dashboard with user and event management
-- Platform-wide settings (pricing enforcement, maintenance mode)
-- Audit trail for admin actions
+- Transactional email — verification, password reset, welcome (see `templates/emails/`)
 - Structured JSON logging with rotating file handler in production
 
 ---
@@ -126,60 +141,68 @@ If anonymous user:
 ┌─────────────────────────────────────────────────────────────────┐
 │                         CLIENT LAYER                             │
 │   Organizer Dashboard    Event Gallery    Face Scan UI           │
-│        (Next.js)            (Next.js)       (Next.js)           │
 └──────────────────────────────┬──────────────────────────────────┘
-                               │ HTTP/REST
+                               │ HTTP/REST + SSE
 ┌──────────────────────────────▼──────────────────────────────────┐
 │                      FASTAPI APPLICATION                          │
 │                                                                   │
-│  /auth   /events   /photos   /faces   /gallery   /admin          │
+│  /auth   /events   /media   /faces   /gallery   /downloads       │
 │                                                                   │
 │  Middleware: CORS, RequestID                                      │
 │  Global exception handlers → consistent ApiResponse shape         │
 └──────┬───────────┬──────────────┬──────────────┬────────────────┘
        │           │              │              │
 ┌──────▼──┐  ┌────▼─────┐  ┌────▼─────┐  ┌────▼─────────────────┐
-│  Auth   │  │  Event   │  │  Photo   │  │    Face Service       │
+│  Auth   │  │  Event   │  │  Media   │  │    Face Service       │
 │ Service │  │ Service  │  │ Service  │  │  (DeepFace/ArcFace)   │
 └──────┬──┘  └────┬─────┘  └────┬─────┘  └────┬─────────────────┘
        │          │              │              │
 ┌──────▼──────────▼──────────────▼──────────────▼─────────────────┐
 │                        DATA LAYER                                 │
-├─────────────────┬──────────────────┬────────────────────────────┤
-│   PostgreSQL    │     MongoDB       │           Redis            │
-│                 │                  │                            │
-│  users          │  face_embeddings  │  Celery broker (db 0)     │
-│  events         │  (512-dim float   │  Celery results (db 1)    │
-│  event_members  │   arrays per      │  Anonymous scan tokens    │
-│  event_invites  │   detected face)  │  Application cache        │
-│  photos         │                  │                            │
-│  user_event_    │                  │                            │
-│  galleries      │                  │                            │
-│  platform_      │                  │                            │
-│  settings       │                  │                            │
-└─────────────────┴──────────────────┴────────────────────────────┘
+├───────────────────────────────────┬───────────────────────────────┤
+│              PostgreSQL             │              Redis            │
+│         (asyncpg + pgvector)        │                                │
+│                                     │  Celery broker + result backend│
+│  users, events, event_members,      │  Event-scoped upload progress  │
+│  event_invites, media,              │  (live counter + pub/sub)      │
+│  face_embeddings (vector(512)),     │  Anonymous scan tokens         │
+│  user_event_galleries               │  Application cache             │
+└───────────────────────────────────┴───────────────────────────────┘
                            │
 ┌──────────────────────────▼───────────────────────────────────────┐
 │                    CELERY WORKER POOL                             │
 │                                                                   │
-│   process_photo_task    warmup_models_task                        │
+│   process_image_batch_task   process_video_batch_task             │
 │                                                                   │
-│   concurrency=2 (CPU-bound face detection)                        │
-│   prefetch_multiplier=1 (one task at a time per worker)           │
-│   acks_late=True (only ack after completion)                      │
+│   Per image, sequential: detect faces THEN promote to storage.    │
+│   Different images in a chunk still run concurrently against      │
+│   each other. Face-detection model is loaded ONCE per worker      │
+│   process (worker_process_init hook), not per task or per image.  │
+│   Celery's own --concurrency IS the parallelism across CPU cores  │
+│   for the CPU-bound detection step.                                │
 └──────────────────────────────────────────────────────────────────┘
                            │
 ┌──────────────────────────▼───────────────────────────────────────┐
 │                      FILE STORAGE                                 │
 │                                                                   │
-│   Local (dev) → abstracted BaseStorage → S3 (prod)               │
+│   Staging (temp) and final storage are deliberately separate,     │
+│   even when both happen to be local disk:                         │
 │                                                                   │
-│   storage/                                                        │
-│   └── events/                                                     │
-│       └── {event_id}/                                             │
-│           ├── photos/     ← organizer + approved attendee photos  │
-│           └── faces/      ← temporary scan uploads (deleted       │
-│                              after embedding extraction)          │
+│   storage/tmp/{event_id}/{key}.ext        ← every upload lands    │
+│                                              here first, always    │
+│                                                                   │
+│   BaseStorage.save_from_path() — one call shape, three backends:  │
+│     local        → storage/final/events/{event_id}/photos/{key}   │
+│     cloudinary    → CDN with on-the-fly transforms (existing       │
+│                      presets)                                     │
+│     cloudflare    → R2, thumbnail/display variants generated once │
+│                      at promotion time, served via a custom        │
+│                      domain (or presigned URLs)                   │
+│                                                                   │
+│   The temp copy is always deleted by the SAME cleanup step after  │
+│   promotion, regardless of which backend was used — "local" being │
+│   a real final destination behaves identically to a cloud backend │
+│   from the pipeline's point of view.                              │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,17 +215,17 @@ If anonymous user:
 | API Framework | FastAPI | Async support, automatic OpenAPI docs, Pydantic v2 |
 | Language | Python 3.12 | Type aliases, improved generics, performance |
 | Package Manager | uv | Fast, modern Python package management |
-| Relational DB | PostgreSQL 16 | Users, events, photos, galleries — structured relational data |
-| Document DB | MongoDB 7 | Face embeddings — variable-length float arrays, event-scoped queries |
-| Cache / Broker | Redis 7 | Celery message broker, result backend, anonymous tokens, app cache |
-| Task Queue | Celery 5 | Async photo processing, retries, worker isolation |
+| Database | PostgreSQL 16 + pgvector | Users, events, media, galleries, AND face embeddings — one database, native vector similarity search |
+| Cache / Broker | Redis 7 | Celery message broker, result backend, event-scoped upload progress (pub/sub), anonymous tokens, app cache |
+| Task Queue | Celery 5 | Async media processing, chunked batch tasks, retries, worker isolation |
 | Face Detection | DeepFace + RetinaFace | Best accuracy for group photos with varied angles/lighting |
 | Face Recognition | ArcFace | State-of-the-art accuracy, 512-dim embeddings |
-| Similarity Search | NumPy (cosine) | Batch matrix operations — handles 8,000 embeddings in <100ms |
-| ORM | SQLAlchemy 2 | Mapped columns, type-safe queries |
+| Similarity Search | pgvector (`<=>` cosine distance) | Native in-database search — no embeddings ever leave Postgres for a query |
+| ORM | SQLAlchemy 2 (async, asyncpg) | Mapped columns, type-safe async queries |
 | Migrations | Alembic | Schema versioning |
-| Async Mongo | Motor | Non-blocking MongoDB queries in FastAPI |
-| File Storage | Local → S3 | Abstracted behind BaseStorage — swappable |
+| File Storage | Local / Cloudinary / Cloudflare R2 | Three symmetric backends behind one interface — swappable per deployment, and a given media item can permanently live on any one of them |
+| Auth | JWT + Google OAuth 2.0 | Email/password and social login |
+| Email | Jinja2 templates + your provider | Verification, password reset, welcome emails |
 | Containerization | Docker + Compose | Reproducible dev and production environments |
 
 ---
@@ -212,221 +235,124 @@ If anonymous user:
 ```
 galleria/
 ├── app/
-│   ├── api/                        # Route handlers
-│   │   ├── auth.py                 # Registration, login, /me
-│   │   ├── events.py               # Event CRUD, access, members, invites
-│   │   ├── photos.py               # Upload, serve, approve, reject
-│   │   ├── faces.py                # Face scan, anonymous scan, gallery claim
-│   │   ├── gallery.py              # Gallery retrieval, flag management
-│   │   ├── downloads.py            # Single photo and zip downloads
-│   │   ├── admin.py                # Admin user/event/settings management
-│   │   └── dependencies.py         # FastAPI dependency injection
+│   ├── admin/                       # Reserved for the admin panel — see Roadmap
+│   ├── api/
+│   │   ├── router/
+│   │   │   ├── auth.py              # Registration, login, /me, Google OAuth
+│   │   │   ├── downloads.py         # Single media and zip downloads
+│   │   │   ├── event.py             # Event CRUD, access, members, invites
+│   │   │   ├── faces.py             # Face scan, anonymous scan, gallery claim
+│   │   │   ├── gallery.py           # Gallery retrieval, flag management
+│   │   │   └── media.py             # Upload (organizer + attendee), serve, upload-progress SSE
+│   │   └── dependencies.py          # FastAPI dependency injection
 │   │
-│   ├── core/                       # Domain-agnostic utilities
-│   │   ├── config.py               # Pydantic Settings — .env driven
-│   │   ├── enums.py                # All domain enums (EventStatus, PhotoStatus, etc.)
-│   │   ├── schemas.py              # ApiResponse[T] wrapper, ApiErrorResponse
-│   │   ├── security.py             # JWT, password hashing, access code hashing
-│   │   ├── logging.py              # Colored dev logging, JSON prod logging
-│   │   ├── cache.py                # Namespaced Redis cache (event_cache, gallery_cache)
-│   │   ├── middleware.py           # RequestID middleware
-│   │   ├── exceptions.py           # Global exception handlers
-│   │   └── pagination.py           # PaginationParams dependency
+│   ├── core/
+│   │   ├── config.py                # Pydantic Settings — .env driven
+│   │   ├── enums.py                 # All domain enums (MediaStatus, StorageStatus, etc.)
+│   │   ├── schemas.py               # ApiResponse[T] wrapper, ApiErrorResponse
+│   │   ├── security.py              # JWT, password hashing, access code hashing
+│   │   ├── logging.py               # Colored dev logging, JSON prod logging
+│   │   ├── cache.py                 # Namespaced Redis cache
+│   │   ├── middleware.py            # RequestID middleware
+│   │   ├── exceptions.py            # Global exception handlers
+│   │   ├── pagination.py            # PaginationParams dependency
+│   │   └── utils.py                 # Shared helpers (utcnow, generate_uuid, ...)
 │   │
-│   ├── db/                         # Database clients
-│   │   ├── postgres.py             # SQLAlchemy engine, session, Base, BaseModel, TimestampMixin
-│   │   ├── mongo.py                # Motor async client singleton
-│   │   └── redis.py                # Async Redis client singleton
+│   ├── db/
+│   │   ├── postgres.py              # Async SQLAlchemy engine/session, Base, BaseModel, TimestampMixin
+│   │   └── redis.py                 # Async Redis client singleton
 │   │
-│   ├── models/                     # SQLAlchemy ORM models
-│   │   ├── user.py                 # User (organizer + attendee, is_admin flag)
-│   │   ├── event.py                # Event, EventMember, EventInvite
-│   │   ├── photo.py                # Photo (storage_key, mime_type, face_count)
-│   │   ├── gallery.py              # UserEventGallery (match_score, flag_reason)
-│   │   └── platform.py             # PlatformSettings (key/value admin config)
-│   │
-│   ├── schemas/                    # Pydantic v2 request/response schemas
+│   ├── models/                      # SQLAlchemy ORM models
 │   │   ├── user.py
-│   │   ├── event.py                # Includes EventSettings schema
-│   │   ├── photo.py                # PhotoSchema with computed url field
-│   │   ├── face.py
-│   │   ├── gallery.py
-│   │   └── admin.py
+│   │   ├── event.py
+│   │   ├── media.py                 # Media — images AND videos, storage_backend/status, temp_path
+│   │   ├── face_embedding.py        # One row per detected face, vector(512), pgvector
+│   │   ├── gallery.py               # UserEventGallery
+│   │   ├── platform.py
+│   │   └── tokens.py                # Email verification / password reset tokens
 │   │
-│   ├── services/                   # Business logic layer
-│   │   ├── auth_service.py         # Registration, login
-│   │   ├── event_service.py        # Event lifecycle, membership, invites
-│   │   ├── photo_service.py        # Upload, approval flow, status tracking
-│   │   ├── face_service.py         # DeepFace wrapper, cosine similarity
-│   │   ├── search_service.py       # MongoDB embedding search, deduplication
-│   │   ├── gallery_service.py      # Gallery upsert, claim, flag management
-│   │   ├── storage_service.py      # BaseStorage ABC, LocalStorage implementation
-│   │   ├── download_service.py     # Single photo and streaming zip downloads
-│   │   └── platform_service.py     # Platform settings CRUD
+│   ├── schemas/                     # Pydantic v2 request/response schemas
 │   │
-│   ├── workers/                    # Celery tasks
-│   │   ├── celery_app.py           # Celery configuration, warmup signal
-│   │   └── photo_tasks.py          # process_photo_task, warmup_models_task
+│   ├── services/
+│   │   ├── auth/
+│   │   │   ├── auth_service.py
+│   │   │   ├── google_oauth.py
+│   │   │   └── utils.py
+│   │   ├── storage_service/
+│   │   │   ├── base.py              # BaseStorage — save_from_path() only
+│   │   │   ├── temp.py              # TempStorage — staging, not a BaseStorage
+│   │   │   ├── local.py             # Peer final backend, symmetric with cloud ones
+│   │   │   ├── cloudinary.py
+│   │   │   ├── cloudflare.py
+│   │   │   ├── factory.py           # get_storage(backend) + shared temp_storage singleton
+│   │   │   ├── schemas.py           # SaveResult, per-backend Extras types
+│   │   │   ├── constants.py
+│   │   │   └── exceptions.py
+│   │   ├── media_service.py         # Chunked ingest, dedupe, bulk insert, dispatch
+│   │   ├── face_service.py          # DeepFace wrapper: detect_faces_optimized, warm_up
+│   │   ├── search_service.py        # pgvector cosine similarity search
+│   │   ├── gallery_service.py
+│   │   ├── download_service.py
+│   │   ├── email_service.py
+│   │   ├── event_service.py
+│   │   └── platform_service.py
 │   │
-│   └── main.py                     # FastAPI app, middleware, routers, lifespan
+│   ├── templates/emails/            # base.html + verify_email, password_reset, welcome
+│   │
+│   ├── workers/
+│   │   ├── celery_app.py            # Celery config, worker_process_init model warm-up hook
+│   │   └── media_tasks.py           # process_image_batch_task, process_video_batch_task
+│   │
+│   └── main.py
 │
-├── alembic/                        # Database migrations
-│   ├── versions/                   # Migration files
-│   └── env.py                      # Alembic environment (reads from settings)
-│
-├── tests/                          # Test suite
-│   ├── conftest.py
-│   ├── test_auth.py
-│   ├── test_events.py
-│   ├── test_photos.py
-│   ├── test_face_search.py
-│   └── test_gallery.py
-│
-├── docker-compose.yml              # All services
-├── docker-compose.dev.yml          # Infrastructure only (dev)
+├── alembic/
+├── storage/                         # Local dev storage (git-ignored)
+├── docker-compose.yml
 ├── Dockerfile
-├── pyproject.toml                  # uv dependencies
-├── alembic.ini
-└── .env.example
+├── pyproject.toml
+└── README.md
 ```
 
 ---
 
 ## Database Design
 
-### PostgreSQL Schema
+Galleria runs on a single PostgreSQL database. Face embeddings previously lived in MongoDB in an earlier version of this project; they now live in Postgres as `vector(512)` columns via the `pgvector` extension, queried with native `<=>` cosine-distance operators. See [Design Decisions](#design-decisions) for why.
 
-**`users`**
-| Column | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| email | VARCHAR(255) | Unique, indexed |
-| password_hash | VARCHAR(255) | bcrypt via pwdlib |
-| display_name | VARCHAR(255) | Optional |
-| face_embedding | FLOAT8[] | 512-dim ArcFace embedding, nullable |
-| face_updated_at | TIMESTAMPTZ | When embedding was last updated |
-| is_admin | BOOLEAN | Admin panel access |
-| is_active | BOOLEAN | Account active state |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
+### Key Tables
 
-**`events`**
-| Column | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| owner_id | UUID FK | References users |
-| title | VARCHAR(255) | |
-| description | TEXT | Optional |
-| event_date | TIMESTAMPTZ | Optional |
-| status | ENUM | active, archived, deleted |
-| is_private | BOOLEAN | |
-| access_mode | ENUM | link, code, approved_list, combined |
-| access_code_hash | VARCHAR(255) | bcrypt hashed, nullable |
-| settings | JSONB | allow_attendee_uploads, require_upload_approval, downloads_enabled, gallery_visible |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
+**`users`** — email, password_hash, display_name, face_embedding (nullable, for repeat scans), is_admin, is_active.
 
-**`event_members`**
-| Column | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| event_id | UUID FK | References events, CASCADE |
-| user_id | UUID FK | References users, CASCADE |
-| role | ENUM | organizer, attendee |
-| status | ENUM | active, removed |
-| added_by | UUID FK | References users, nullable |
-| created_at | TIMESTAMPTZ | |
+**`events`** — owner_id, title, description, event_date, status, is_private, access_mode, access_code_hash (bcrypt), settings (JSONB: allow_attendee_uploads, require_upload_approval, downloads_enabled, gallery_visible).
 
-Unique constraint on (event_id, user_id).
+**`event_members`** — event_id, user_id, role (organizer/attendee), status, added_by. Unique on (event_id, user_id).
 
-**`event_invites`**
-| Column | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| event_id | UUID FK | References events, CASCADE |
-| email | VARCHAR(255) | Indexed |
-| invite_token | VARCHAR(255) | Unique, for email links |
-| status | ENUM | pending, accepted, revoked |
-| created_at | TIMESTAMPTZ | |
-| accepted_at | TIMESTAMPTZ | Nullable |
+**`event_invites`** — event_id, email, invite_token, status, accepted_at.
 
-**`photos`**
-| Column | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| event_id | UUID FK | References events, CASCADE |
-| uploaded_by | UUID FK | References users, nullable |
-| storage_key | VARCHAR(255) | Opaque key — storage service resolves to file path |
-| filename | VARCHAR(255) | Original filename |
-| file_size | INTEGER | Bytes |
-| mime_type | VARCHAR(50) | image/jpeg, image/png, image/webp |
-| width | INTEGER | Pixels |
-| height | INTEGER | Pixels |
-| face_count | INTEGER | Valid faces detected |
-| status | ENUM | pending_approval, rejected, pending, processing, processed, failed |
-| is_private | BOOLEAN | |
-| error_message | TEXT | Populated on failure |
-| processed_at | TIMESTAMPTZ | Nullable |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
+**`media`** — event_id, uploaded_by (nullable — anonymous attendee uploads), file_hash (unique per event), filename, file_size, mime_type, media_type (image/video), width, height, storage_key (unique), **storage_backend** (nullable — `NULL` until actually promoted), **storage_status** (`PENDING` → `PROMOTED`), **temp_path** (staging location, cleared after promotion + processing both terminal), extras (JSONB, backend-specific), face_count, status (media_type-specific processing state), is_private (gallery-visibility flag, unrelated to storage access), error_message, processed_at, uploaded_at.
 
-**`user_event_galleries`**
-| Column | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| user_id | UUID FK | References users, CASCADE |
-| event_id | UUID FK | References events, CASCADE |
-| photo_id | UUID FK | References photos, CASCADE |
-| match_score | FLOAT | Cosine similarity score (0-1) |
-| is_flagged | BOOLEAN | Hidden from normal gallery view |
-| flag_reason | ENUM | not_me, dislike, removed — nullable |
-| flagged_at | TIMESTAMPTZ | Nullable |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
+**`face_embeddings`** — event_id (denormalized from media, so search never joins), media_id, embedding (`vector(512)`), bounding_box (JSON), detection_confidence, face_index, model_version, created_at. Unique on (media_id, face_index).
 
-Unique constraint on (user_id, event_id, photo_id).
+**`user_event_galleries`** — user_id, event_id, media_id, match_score, is_flagged, flag_reason. Unique on (user_id, event_id, media_id).
 
-**`platform_settings`**
-| Column | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| key | VARCHAR(100) | Unique setting key |
-| value | TEXT | JSON string |
-| description | TEXT | Human-readable description |
-| updated_by | UUID FK | Admin who last changed this |
-| updated_at | TIMESTAMPTZ | |
+**`tokens`** — email verification and password reset tokens.
 
-### MongoDB Schema
+**`platform_settings`** — key/value admin config (JSON string value).
 
-**Collection: `face_embeddings`**
+---
 
-One document per detected face per photo. A photo with 5 people = 5 documents.
+## Storage Architecture
 
-```json
-{
-  "_id": "ObjectId",
-  "event_id": "uuid-string",
-  "photo_id": "uuid-string",
-  "embedding": [0.231, -0.445, 0.112, "...512 floats total"],
-  "bounding_box": {
-    "x": 120,
-    "y": 45,
-    "width": 80,
-    "height": 95
-  },
-  "detection_confidence": 0.994,
-  "face_index": 0,
-  "model_version": "ArcFace",
-  "created_at": "ISODate"
-}
-```
+Three backends implement one interface (`BaseStorage.save_from_path()`), deliberately excluding "receive a raw upload" from that interface — only `TempStorage` (not a `BaseStorage`) ever touches an `UploadFile` directly. This exists because **local storage can be either scratch space or a genuine permanent destination**, and those two roles must never be conflated:
 
-**Indexes:**
-- `event_id` (single)
-- `photo_id` (single)
-- `(event_id, photo_id)` (compound)
+1. Every upload streams into `TempStorage` first — hashed while writing, one I/O pass. This happens regardless of the event's configured backend.
+2. Face detection (for images) runs against the temp file.
+3. The temp file is promoted via `save_from_path()` to whichever backend is configured — including "local," which copies it into a *separate* permanent directory tree, not the temp one.
+4. The temp copy is deleted by the same cleanup step no matter which backend was used.
 
-The compound index is the hot path — every face search fetches all embeddings for an event.
+This means `Media.storage_backend` is `NULL` until step 3 actually succeeds — before this redesign it defaulted to `LOCAL`, which became ambiguous the moment "local" stopped meaning "not done yet" and started being a valid permanent choice.
+
+Cloudflare R2 has no on-the-fly image transforms, so thumbnail/display variants are generated once with Pillow at promotion time and stored as separate objects, served via a custom domain (free, real CDN caching) or presigned URLs if no public domain is configured. Cloudinary keeps using on-request transformations via existing presets. Local storage serves through `GET /events/{id}/media/serve/{key}`, which also transparently covers the brief window before a file has been promoted anywhere.
 
 ---
 
@@ -434,209 +360,102 @@ The compound index is the hot path — every face search fetches all embeddings 
 
 ### Detection
 
-Galleria uses **RetinaFace** as the face detector. RetinaFace is a single-stage dense face localisation method that handles:
-- Multiple faces per image (group photos)
-- Varied face angles and orientations
-- Small faces relative to image size
-- Partial occlusion
+RetinaFace handles multiple faces per image, varied angles, small faces, and partial occlusion. Each detected face produces a bounding box and a confidence score.
 
-Each detected face produces a **bounding box** (x, y, width, height) and a **detection confidence score** (0-1).
+**Speed optimization:** images with a long edge above ~1600px are downscaled before detection — accuracy gains above that resolution are marginal, but detection cost scales with pixel count. Bounding boxes are scaled back to the original image's coordinates afterward, so downstream cropping/display stays correct.
 
 **Quality filters applied before storing:**
-- Detection confidence must be ≥ 0.9 (configurable via `FACE_DETECTION_CONFIDENCE`)
-- Bounding box must be ≥ 80×80 pixels (configurable via `FACE_MIN_SIZE`)
+- Detection confidence ≥ `FACE_DETECTION_CONFIDENCE` (default 0.9)
+- Bounding box ≥ `FACE_MIN_SIZE` pixels (default 80×80)
 
-These filters eliminate background faces that are too distant or blurry for reliable matching.
+Videos skip this entire stage — only images participate in face search.
 
 ### Embedding Extraction
 
-After detection, each valid face region is passed through **ArcFace** (Additive Angular Margin Loss), a deep CNN that maps a face image to a point in 512-dimensional space.
+Each valid face region is passed through ArcFace, producing a 512-dimensional embedding. Same person → geometrically close embeddings; different people → distant. Robust to lighting, minor angle changes, aging.
 
-Key properties of ArcFace embeddings:
-- Same person across different photos → embeddings are geometrically close
-- Different people → embeddings are geometrically distant
-- Robust to lighting changes, minor angle variations, aging
-- 512 float values per face, ~2KB per embedding
+**Model loading:** the DeepFace model is warmed up once per Celery worker *process* (via a `worker_process_init` signal), not per task or per image — see `workers/celery_app.py`. Celery's own `--concurrency` is the source of multi-core parallelism for this CPU-bound step; there's deliberately no second layer of subprocess parallelism inside a task, which would oversubscribe cores.
 
 ### Similarity Search
 
-When a user scans their face, their embedding is compared against all embeddings in the event using **cosine similarity**:
+pgvector's `<=>` operator computes cosine distance natively inside Postgres:
 
-```
-similarity = (A · B) / (|A| × |B|)
-```
-
-Range: -1 (opposite) to 1 (identical). In practice, same-person matches score 0.7-0.95, different-person scores 0.0-0.5.
-
-The search uses NumPy batch matrix multiplication for efficiency:
-
-```python
-# All N event embeddings loaded as a matrix
-matrix = np.array([doc["embedding"] for doc in candidates])  # shape: (N, 512)
-query = np.array(user_embedding)                              # shape: (512,)
-
-# Normalize both
-query_norm = query / np.linalg.norm(query)
-matrix_norm = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
-
-# Compute all similarities in one operation
-scores = matrix_norm @ query_norm  # shape: (N,)
+```sql
+SELECT media_id::text, MAX(1 - (embedding <=> :query_vec)) AS similarity
+FROM face_embeddings
+WHERE event_id = :event_id
+  AND 1 - (embedding <=> :query_vec) > :threshold
+GROUP BY media_id
+ORDER BY similarity DESC
+LIMIT :limit
 ```
 
-At 1,000 photos × 8 faces average = 8,000 embeddings, this runs in under 100ms on CPU.
-
-**Deduplication:** A photo with 5 faces produces 5 embedding documents. If the user matches 3 of them (different photos of the same face), we keep only the highest score per photo.
+No embeddings are pulled into application memory for a search — the comparison, filtering, deduplication (`MAX` per `media_id`), and ranking all happen in one query.
 
 ### Threshold
 
-Default similarity threshold: **0.6**. Configurable per deployment via `FACE_SIMILARITY_THRESHOLD`.
-
-- Too high (> 0.8): misses valid matches (false negatives)
-- Too low (< 0.4): returns wrong people (false positives)
-- 0.6 is conservative — false positives are worse than false negatives in this context
+Default: **0.6**, configurable via `FACE_SIMILARITY_THRESHOLD`. Higher = stricter (fewer false positives, more false negatives); lower = the reverse. 0.6 is conservative — false positives are worse than false negatives here.
 
 ---
 
 ## Access Control System
 
-Events support four access modes:
-
-### `link`
-Anyone with the event URL can view the gallery. Logged-in users are automatically added as attendee members on first visit — the event appears in their "Attending" list.
-
-### `code`
-Attendees must enter a correct access code. The code is bcrypt-hashed at rest — even admins cannot read the plaintext. Logged-in users are added as members after successful verification — they never need to enter the code again.
-
-### `approved_list`
-Only emails explicitly added by the organizer can access the event. Requires login. Logged-in users on the list are automatically added as members. Organizers can add emails individually or in bulk, and revoke access at any time.
-
-### `combined`
-Either an approved list email (auto-grant) or a correct access code. Approved list users bypass the code entirely.
-
-### Membership Persistence
-For logged-in users, all access modes grant a permanent `EventMember` record after first successful access. This means:
-- Returning visits require no re-verification
-- The event appears in the user's attending list
-- Organizers can remove members to revoke access
-- Members can leave events themselves
+*(unchanged from the original design — see previous documentation for `link`, `code`, `approved_list`, and `combined` access modes, and membership persistence behavior.)*
 
 ---
 
 ## API Reference
 
-All endpoints return:
-```json
-{
-  "message": "Human-readable status message",
-  "data": { }
-}
-```
-
-Error responses:
-```json
-{
-  "message": "Error description",
-  "data": null,
-  "errors": [
-    { "field": "email", "message": "value is not a valid email", "type": "value_error" }
-  ]
-}
-```
+All endpoints return `{ "message": ..., "data": ... }`; errors return `{ "message": ..., "data": null, "errors": [...] }`.
 
 ### Auth
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/auth/register` | None | Register new account |
 | POST | `/auth/login` | None | Login, receive JWT |
+| GET | `/auth/google` | None | Start Google OAuth flow |
 | GET | `/auth/me` | Bearer | Current user profile |
 
 ### Events
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| POST | `/events` | Bearer | Create event |
-| GET | `/events` | Bearer | My managed events |
-| GET | `/events/attending` | Bearer | Events I attend |
-| GET | `/events/{id}` | None | Event details |
-| PATCH | `/events/{id}` | Organizer | Update event |
-| DELETE | `/events/{id}` | Organizer | Soft delete event |
-| POST | `/events/{id}/access/verify` | None | Verify access code |
-| POST | `/events/{id}/members` | Organizer | Add co-organizer |
-| DELETE | `/events/{id}/members/{uid}` | Organizer | Remove member |
-| POST | `/events/{id}/invites` | Organizer | Add approved emails |
-| DELETE | `/events/{id}/invites/{email}` | Organizer | Revoke invite |
-| DELETE | `/events/{id}/leave` | Bearer | Leave event |
+*(unchanged — see Access Control section for the access-mode-specific endpoints.)*
 
-### Photos
+### Media
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/events/{id}/photos` | Organizer | Bulk upload |
-| POST | `/events/{id}/photos/attendee` | Attendee | Attendee upload |
-| GET | `/events/{id}/photos` | Access | List photos |
-| GET | `/events/{id}/photos/status` | Organizer | Processing status |
-| GET | `/events/{id}/photos/pending-approval` | Organizer | Pending uploads |
-| POST | `/events/{id}/photos/{pid}/approve` | Organizer | Approve upload |
-| POST | `/events/{id}/photos/{pid}/reject` | Organizer | Reject upload |
-| GET | `/events/{id}/photos/serve/{pid}` | Access | Serve photo file |
-| PATCH | `/events/{id}/photos/{pid}` | Organizer | Set private/public |
-| DELETE | `/events/{id}/photos/{pid}` | Organizer | Delete photo |
+| POST | `/events/{id}/media` | Organizer | Bulk upload (chunked, concurrent) |
+| POST | `/events/{id}/media/attendee-upload` | Access | Attendee upload — anonymous or authenticated, subject to approval setting |
+| GET | `/events/{id}/media` | Access | List media |
+| GET | `/events/{id}/media/upload-progress` | Access | **New** — SSE stream, live progress + ETA, open to anyone who can access the event |
+| GET | `/events/{id}/media/pending-approval` | Organizer | Pending attendee uploads |
+| POST | `/events/{id}/media/{media_id}/approve` | Organizer | Approve upload |
+| POST | `/events/{id}/media/{media_id}/reject` | Organizer | Reject upload |
+| GET | `/events/{id}/media/serve/{key}` | Access | Serve media file — proxies while local/pending, redirects to the real backend once promoted |
+| PATCH | `/events/{id}/media/{media_id}` | Organizer | Set private/public |
+| DELETE | `/events/{id}/media/{media_id}` | Organizer | Delete media |
 
 ### Faces & Gallery
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| POST | `/events/{id}/faces/scan` | Bearer | Scan face, build gallery |
-| POST | `/events/{id}/faces/scan/anonymous` | None | Anonymous face scan |
-| POST | `/events/{id}/faces/claim` | Bearer | Claim anonymous gallery |
-| GET | `/events/{id}/gallery` | Access | Full event gallery |
-| GET | `/events/{id}/gallery/me` | Bearer | My matched gallery |
-| GET | `/events/{id}/gallery/anonymous` | None + token | Anonymous gallery |
-| POST | `/events/{id}/gallery/{pid}/flag` | Bearer | Flag photo |
-| DELETE | `/events/{id}/gallery/{pid}/flag` | Bearer | Unflag photo |
+*(unchanged — see previous documentation.)*
 
 ### Downloads
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/events/{id}/photos/{pid}/download` | Access | Download single photo |
-| GET | `/events/{id}/gallery/me/download` | Bearer | Download gallery as zip |
-
-### Admin
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/admin/users` | Admin | List all users |
-| GET | `/admin/users/{id}` | Admin | User detail |
-| PATCH | `/admin/users/{id}` | Admin | Update user |
-| GET | `/admin/events` | Admin | List all events |
-| DELETE | `/admin/events/{id}` | Admin | Force delete event |
-| GET | `/admin/settings` | Admin | All platform settings |
-| PUT | `/admin/settings/{key}` | Admin | Update setting |
-| GET | `/admin/stats` | Admin | Platform statistics |
+*(unchanged — see previous documentation.)*
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-
 - Python 3.12+
 - Docker and Docker Compose
-- uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- uv
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/yourusername/galleria.git
 cd galleria
-
-# Copy environment file and edit values
 cp .env.example .env
-
-# Install dependencies
 uv sync
-
-# Start infrastructure (PostgreSQL, MongoDB, Redis)
-docker compose -f docker-compose.dev.yml up -d
-
-# Run database migrations
+docker compose -f docker-compose.dev.yml up -d   # PostgreSQL + Redis
 uv run alembic upgrade head
 ```
 
@@ -646,8 +465,8 @@ uv run alembic upgrade head
 
 ```bash
 # Application
-APP_ENV=development                  # development | production
-SECRET_KEY=your-secret-key          # JWT signing key — use a long random string
+APP_ENV=development
+SECRET_KEY=your-secret-key
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 ALGORITHM=HS256
 
@@ -658,57 +477,65 @@ POSTGRES_DB=galleria
 POSTGRES_USER=galleria
 POSTGRES_PASSWORD=galleria
 
-# MongoDB
-MONGO_HOST=localhost
-MONGO_PORT=27017
-MONGO_DB=galleria
-
 # Redis
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_DB=0
 
-# Celery (derived from Redis settings in config.py)
-# No separate env vars needed
-
 # File Storage
-STORAGE_BACKEND=local                # local | s3
-LOCAL_STORAGE_PATH=./storage
+STORAGE_BACKEND=local                 # local | cloudinary | cloudflare
+TEMP_STORAGE_ROOT=./storage/tmp       # staging — used regardless of final backend
+LOCAL_STORAGE_FINAL_ROOT=./storage/final
+
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+CLOUDINARY_FOLDER_PREFIX=galleria
+
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_ACCESS_KEY_ID=
+CLOUDFLARE_SECRET_ACCESS_KEY=
+CLOUDFLARE_BUCKET=
+CLOUDFLARE_PUBLIC_BASE_URL=           # optional — omit to use presigned URLs
+
+# Google OAuth
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+GOOGLE_OAUTH_REDIRECT_URI=
+
+# Email
+EMAIL_FROM_ADDRESS=
+EMAIL_PROVIDER_API_KEY=               # fill in for your provider (SES/Resend/SMTP/etc.)
 
 # Face Recognition
-FACE_DETECTOR_BACKEND=retinaface     # retinaface | mtcnn | opencv
+FACE_DETECTOR_BACKEND=retinaface
 FACE_MODEL_NAME=ArcFace
-FACE_SIMILARITY_THRESHOLD=0.6        # 0.0 - 1.0, higher = stricter matching
-FACE_DETECTION_CONFIDENCE=0.9        # minimum detector confidence to store embedding
-FACE_MIN_SIZE=80                     # minimum face bounding box size in pixels
+FACE_SIMILARITY_THRESHOLD=0.6
+FACE_DETECTION_CONFIDENCE=0.9
+FACE_MIN_SIZE=80
 
 # Anonymous scan
-ANONYMOUS_SCAN_TTL_SECONDS=7200      # 2 hours
+ANONYMOUS_SCAN_TTL_SECONDS=7200
 
 # Cache
-DEFAULT_CACHE_TTL=300                # 5 minutes
+DEFAULT_CACHE_TTL=300
 ```
+
+> Variable names above match the concepts introduced in this rewrite — cross-check exact names against `app/core/config.py`, which wasn't part of this pass.
 
 ---
 
 ## Running the Application
 
-### Development (recommended)
-
-Run infrastructure in Docker, application locally for fast reload:
+### Development
 
 ```bash
-# Start infrastructure only
 docker compose -f docker-compose.dev.yml up -d
-
-# Start FastAPI application
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# Start Celery worker (in separate terminal)
 uv run celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 ```
 
-API docs available at: http://localhost:8000/docs
+API docs: http://localhost:8000/docs
 
 ### Full Docker
 
@@ -716,28 +543,13 @@ API docs available at: http://localhost:8000/docs
 docker compose up
 ```
 
-### Create First Admin User
-
-After running migrations and starting the app, promote a user to admin:
-
-```bash
-docker compose exec postgres psql -U galleria -d galleria -c \
-  "UPDATE users SET is_admin=true WHERE email='your@email.com';"
-```
-
 ---
 
 ## Running Tests
 
 ```bash
-# Run all tests
 uv run pytest
-
-# Run with coverage
 uv run pytest --cov=app --cov-report=term-missing
-
-# Run specific test file
-uv run pytest tests/test_face_search.py -v
 ```
 
 ---
@@ -745,22 +557,16 @@ uv run pytest tests/test_face_search.py -v
 ## Deployment
 
 ### Production Checklist
-
-- [ ] Set `APP_ENV=production` — enables JSON logging and file rotation
-- [ ] Use a strong random `SECRET_KEY` (minimum 32 characters)
-- [ ] Set `STORAGE_BACKEND=s3` and configure AWS credentials
-- [ ] Use managed PostgreSQL (AWS RDS, Supabase, etc.)
-- [ ] Use managed MongoDB (Atlas)
-- [ ] Use managed Redis (ElastiCache, Upstash, etc.)
-- [ ] Mount DeepFace weights as a Docker volume to survive container rebuilds
-- [ ] Set `FACE_SIMILARITY_THRESHOLD` based on your accuracy requirements
+- [ ] `APP_ENV=production` — JSON logging, file rotation
+- [ ] Strong random `SECRET_KEY` (32+ characters)
+- [ ] `STORAGE_BACKEND=cloudinary` or `cloudflare` — size Celery `--concurrency` to available CPU cores, since that's the parallelism source for face detection
+- [ ] Managed PostgreSQL with the `pgvector` extension enabled
+- [ ] Managed Redis
+- [ ] Mount DeepFace weights as a Docker volume to survive rebuilds
 - [ ] Configure CORS `allow_origins` to your frontend domain only
-- [ ] Run Celery with at least 2 workers for parallel photo processing
-- [ ] Set up log aggregation (Datadog, Loki, CloudWatch)
+- [ ] Set up log aggregation
 
 ### Docker Volume for Model Weights
-
-Add to `docker-compose.yml` to persist DeepFace model weights across rebuilds:
 
 ```yaml
 worker:
@@ -772,63 +578,61 @@ volumes:
   deepface_weights:
 ```
 
-The weights (~256MB for ArcFace + RetinaFace) download once and are reused. Without this, every container rebuild triggers a ~8 minute re-download.
-
 ---
 
 ## Design Decisions
 
-### Why two databases?
+### Why Postgres + pgvector instead of MongoDB?
 
-**PostgreSQL** handles relational data — users, events, memberships, photos metadata. It's ideal for structured queries with foreign keys, joins, and constraints.
+An earlier version of this project stored face embeddings in MongoDB, with similarity search done via a numpy batch cosine-similarity operation in application memory. That worked, but meant every search pulled every candidate embedding for an event out of the database first. Moving embeddings into Postgres as `vector(512)` columns lets pgvector's `<=>` operator do the comparison, filtering, and ranking natively in one SQL query — nothing leaves the database for a search, and there's only one database to operate instead of two.
 
-**MongoDB** handles face embeddings. Each photo generates a variable number of embedding documents (0 to N faces). The embedding itself is a 512-element float array that PostgreSQL's ARRAY type could technically store, but MongoDB's document model is a better fit for:
-- Storing arbitrary metadata alongside each embedding (bounding box, confidence, model version)
-- Scoping queries by event_id without touching photo metadata
-- Future migration to MongoDB Atlas Vector Search for approximate nearest neighbor
+### Why separate temp storage from final storage?
 
-### Why Celery over FastAPI background tasks?
+Local disk can be a legitimate *permanent* backend, not just scratch space — an event can be configured to store its media on local disk forever. If staging and final storage were the same thing, "is this file safe to delete" and "is this file done processing" would become the same ambiguous question. Splitting them means promotion (`save_from_path()`) behaves identically whether the target is local disk, Cloudinary, or Cloudflare — and cleanup of the temp copy is one code path, not one per backend.
 
-FastAPI background tasks run in the same process as the web server. Face detection (DeepFace + TensorFlow) is CPU-intensive and would block request handling. Celery runs in separate worker processes with:
-- Isolated memory (TensorFlow model loaded once per worker)
-- Configurable concurrency (CPU-bound tasks benefit from process-level parallelism)
-- Retry logic with exponential backoff
-- Task state tracking
-- `acks_late=True` ensuring a photo is never lost if a worker crashes mid-processing
+### Why is `storage_backend` nullable instead of defaulting to `LOCAL`?
+
+It used to default to `LOCAL`, which was indistinguishable from "genuinely promoted to local storage" once local became a real final destination. `NULL` now unambiguously means "not promoted yet" — `storage_status` is the source of truth for promotion state, and `storage_backend` is only meaningful once `storage_status == PROMOTED`.
+
+### Why detect faces before promoting to cloud, not concurrently?
+
+Within a single media item, detection runs to completion before promotion starts. This keeps the pipeline for one photo strictly ordered — a photo is never shipped to its final backend before its own face-detection pass has finished (or definitively failed). Different photos in the same batch still process concurrently against each other.
+
+### Why chunk the upload instead of processing the whole batch at once?
+
+Bounds the size of any single dedupe query or bulk insert regardless of how many files come in at once, and lets Celery start on the first chunk while later chunks are still being hashed — relevant once you're optimizing for hundreds of files from multiple people uploading to the same event simultaneously.
+
+### Why event-scoped upload progress instead of a per-request batch ID?
+
+A batch ID has to be remembered and passed around by the client, and doesn't naturally aggregate multiple people uploading to the same event at once. Keying progress by `event_id` in Redis means any client can open the SSE stream with nothing but an ID it already has, get the current state immediately on connect, and see progress from every concurrent uploader — not just its own upload.
+
+### Why load the face-detection model once per worker process, not per task?
+
+DeepFace's model load is the expensive part. Loading it inside the task body means paying that cost on every single Celery task; loading it once when the worker process starts (`worker_process_init`) means paying it once per process, ever, and every task that process runs afterward reuses it — while sizing Celery's `--concurrency` to available cores gives real multi-core parallelism for the CPU-bound detection step without oversubscribing them.
 
 ### Why store storage keys instead of paths?
 
-The `Photo.storage_key` is an opaque identifier (UUID hex). The storage service resolves it to an actual file path internally. This means:
-- Migrating from local to S3 storage requires zero database changes
-- The database doesn't encode assumptions about storage structure
-- Reorganizing file layout (e.g., by year/month) doesn't break existing records
+`Media.storage_key` is an opaque identifier. The storage service resolves it internally, so migrating backends or reorganizing file layout requires zero database changes.
 
-### Why serve photos through the application instead of direct URLs?
+### Why serve media through the application instead of direct URLs?
 
-The storage directory is never publicly mounted. Every photo request goes through `GET /events/{id}/photos/serve/{photo_id}` which:
-- Checks event access (link/code/approved list)
-- Checks `is_private` flag
-- Checks `status` (rejected photos return 404)
-- Returns `Cache-Control` headers centrally
-
-This means private photos are actually private — not just hidden from the UI but inaccessible via direct URL guessing.
+The storage directory is never publicly mounted. `GET /events/{id}/media/serve/{key}` checks event access and the `is_private`/`status` flags, and only proxies bytes itself while a file is local or still processing — once promoted to a cloud backend, it redirects to that backend's own URL (public CDN link or presigned) rather than proxying, so the app server doesn't carry gallery bandwidth once a file has a real home.
 
 ### Why bcrypt for access codes?
 
-Access codes are secrets. If the database is compromised, plaintext codes would immediately expose every event. Bcrypt hashing means:
-- Codes are never stored in readable form
-- Verifying a code requires the same bcrypt check as passwords
-- Brute-forcing is computationally expensive
+Codes are secrets; bcrypt means they're never stored in readable form and brute-forcing is computationally expensive.
 
 ### Why `model_version` on face embeddings?
 
-ArcFace models improve over time. If we ever upgrade from the current model version, embeddings generated by the old model are incompatible with the new one — cosine similarity between embeddings from different model versions is meaningless. Storing `model_version` means we can identify which embeddings need reprocessing after an upgrade.
+If the ArcFace model is ever upgraded, embeddings from the old model are incompatible with the new one — cosine similarity between them is meaningless. Storing `model_version` identifies which rows need reprocessing after an upgrade.
 
 ### Why JSONB for event settings?
 
-Event settings (`allow_attendee_uploads`, `require_upload_approval`, etc.) are stored as JSONB rather than individual columns. This means:
-- Adding a new setting requires no migration
-- Settings can vary per event without schema changes
-- The column is queryable and indexable in PostgreSQL
+New settings need no migration, can vary per event, and stay queryable — validated on write via the `EventSettings` Pydantic schema.
 
-The tradeoff is losing column-level type safety — mitigated by the `EventSettings` Pydantic schema that validates all writes.
+---
+
+## Roadmap
+
+- **Admin panel** — described in an earlier draft of this README as already built; it isn't yet. `app/admin/` is a placeholder and there's no `/admin` API router. Planned: user/event management, platform settings, audit trail, platform statistics.
+- Reprocessing flow for embeddings after a `model_version` upgrade.
